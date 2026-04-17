@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Pipeline Intelligence Engine — Simple CI/CD pipeline using
+  AWS CodePipeline + CodeBuild. Pulls source from GitHub,
+  runs pytest on every push, and publishes test reports.
+
+# ─── Parameters ──────────────────────────────────────────────────────────────
+Parameters:
+
+  GitHubOwner:
+    Type: String
+    Description: GitHub username or organisation that owns the repository.
+
+  GitHubRepo:
+    Type: String
+    Default: pipeline-intelligence-engine
+    Description: Name of the GitHub repository.
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: Branch to watch for changes.
+
+  GitHubConnectionArn:
+    Type: String
+    Description: >
+      ARN of an existing AWS CodeStar Connection to GitHub.
+      Create one in the CodePipeline console → Settings → Connections.
+
+  ProjectName:
+    Type: String
+    Default: pipeline-intelligence-engine
+    Description: Prefix used for all resource names.
+
+  PythonVersion:
+    Type: String
+    Default: "3.11"
+    AllowedValues: ["3.10", "3.11", "3.12"]
+    Description: Python runtime version used in CodeBuild.
+
+# ─── Resources ───────────────────────────────────────────────────────────────
+Resources:
+
+  # ── S3 artifact bucket ─────────────────────────────────────────────────────
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-pipeline-artifacts-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ── IAM role for CodeBuild ─────────────────────────────────────────────────
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-codebuild-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Sid: S3Artifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub "${ArtifactBucket.Arn}/*"
+              - Sid: TestReports
+                Effect: Allow
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Resource: !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${ProjectName}*"
+
+  # ── CodeBuild project ──────────────────────────────────────────────────────
+  TestBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-tests"
+      Description: "Run pytest suite for Pipeline Intelligence Engine"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - Name: DISABLE_LLM
+            Value: "true"
+          - Name: DATAHUB_GMS_URL
+            Value: ""
+          - Name: PYTHON_VERSION
+            Value: !Ref PythonVersion
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub "/aws/codebuild/${ProjectName}-tests"
+
+  # ── IAM role for CodePipeline ──────────────────────────────────────────────
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-codepipeline-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub "${ArtifactBucket.Arn}/*"
+              - Sid: CodeBuild
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt TestBuildProject.Arn
+              - Sid: CodeStarConnection
+                Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnectionArn
+
+  # ── The pipeline itself ────────────────────────────────────────────────────
+  TestPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-test-pipeline"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+
+        # Stage 1 — pull source from GitHub
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODEBUILD_CLONE_REF
+                DetectChanges: "true"
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        # Stage 2 — run pytest
+        - Name: Test
+          Actions:
+            - Name: RunPytest
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref TestBuildProject
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: TestReports
+              RunOrder: 1
+
+# ─── Outputs ─────────────────────────────────────────────────────────────────
+Outputs:
+
+  PipelineConsoleUrl:
+    Description: Direct link to the CodePipeline console
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${TestPipeline}/view"
+
+  CodeBuildConsoleUrl:
+    Description: Direct link to the CodeBuild project
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codebuild/${AWS::AccountId}/projects/${TestBuildProject}/history"
+
+  ArtifactBucketName:
+    Description: S3 bucket holding pipeline artifacts and test reports
+    Value: !Ref ArtifactBucket

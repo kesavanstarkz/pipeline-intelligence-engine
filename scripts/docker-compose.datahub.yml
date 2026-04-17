@@ -1,0 +1,25 @@
+# DataHub Quickstart — run via:
+#   docker compose -f scripts/docker-compose.datahub.yml up -d
+#
+# This is a minimal wrapper around the official DataHub quickstart.
+# For production deployments see: https://datahubproject.io/docs/deploy/kubernetes
+
+version: "3.8"
+
+services:
+
+  datahub-quickstart:
+    image: acryldata/datahub-frontend-react:head
+    container_name: datahub-quickstart
+    # The official quickstart script handles all dependent services.
+    # For a true single-command start, use:
+    #   pip install acryl-datahub && datahub docker quickstart
+    #
+    # GMS (GraphQL / REST API) will be available at: http://localhost:8080
+    # UI will be available at:                        http://localhost:9002
+    ports:
+      - "9002:9002"
+      - "8080:8080"
+    environment:
+      DATAHUB_GMS_HOST: datahub-gms
+      DATAHUB_GMS_PORT: "8080"

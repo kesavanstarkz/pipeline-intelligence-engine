@@ -1,0 +1,78 @@
+version: 0.2
+
+#
+# AWS CodeBuild — Pipeline Intelligence Engine
+# Runs the full pytest suite with coverage reporting.
+#
+
+env:
+  variables:
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    # Disable live LLM / DataHub calls in CI
+    DISABLE_LLM: "true"
+    DATAHUB_GMS_URL: ""
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "=== Installing dependencies ==="
+      - pip install --upgrade pip
+      - pip install -r requirements.txt
+      - pip install pytest-cov pytest-html
+
+  pre_build:
+    commands:
+      - echo "=== Environment info ==="
+      - python --version
+      - pip show pytest
+
+  build:
+    commands:
+      - echo "=== Running test suite ==="
+      - |
+        python -m pytest tests/ \
+          --tb=short \
+          -v \
+          --junitxml=reports/junit.xml \
+          --cov=engine \
+          --cov=api \
+          --cov-report=xml:reports/coverage.xml \
+          --cov-report=html:reports/coverage_html \
+          --cov-report=term-missing \
+          --html=reports/test_report.html \
+          --self-contained-html
+
+  post_build:
+    commands:
+      - echo "=== Build complete. Test results in reports/ ==="
+      - |
+        if [ $CODEBUILD_BUILD_SUCCEEDING -eq 1 ]; then
+          echo "All tests PASSED"
+        else
+          echo "Some tests FAILED — check reports/junit.xml"
+        fi
+
+reports:
+  # Publish JUnit results to CodeBuild Test Reports console
+  pytest-junit:
+    files:
+      - reports/junit.xml
+    file-format: JUNITXML
+
+  # Publish Cobertura coverage to CodeBuild
+  pytest-coverage:
+    files:
+      - reports/coverage.xml
+    file-format: COBERTURAXML
+
+artifacts:
+  files:
+    - reports/**/*
+  name: TestReports
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*

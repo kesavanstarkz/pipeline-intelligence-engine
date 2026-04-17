@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline Intelligence Dashboard</title>
+    <link href="https://fonts.googleapis.css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        black: '#0A0A0A',
+                        surface: '#111111',
+                        border: '#2E2E2E',
+                        textPrimary: '#EDEDED',
+                        textSecondary: '#A1A1AA',
+                        vercelBlue: '#0070F3',
+                        vercelPurple: '#7928CA',
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Visualization Engines -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dagre-d3@0.6.4/dist/dagre-d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js"></script>
+</head>
+
+<body class="bg-black text-textPrimary h-screen flex overflow-hidden selection:bg-vercelBlue/30 font-sans antialiased">
+
+    <!-- Tooltip Element -->
+    <div id="graph-tooltip"
+        class="fixed hidden z-[100] pointer-events-none px-3 py-2 rounded-lg bg-surface/95 border border-border backdrop-blur-xl shadow-2xl text-xs transition-opacity duration-200">
+    </div>
+
+    <!-- Zone 1: Sidebar Nav -->
+    <nav
+        class="w-[240px] flex-shrink-0 border-r border-border bg-black/50 backdrop-blur-xl flex flex-col h-full hidden md:flex z-20">
+        <div class="h-16 flex items-center px-6 border-b border-border">
+            <!-- <div class="w-6 h-6 rounded bg-gradient-to-tr from-vercelBlue to-vercelPurple mr-3"></div> -->
+            <h1 class="font-semibold text-[15px] tracking-tight">Intelligence Engine</h1>
+        </div>
+        <div class="flex-1 overflow-y-auto px-4 py-6 space-y-1">
+            <button
+                class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md bg-white/10 text-white transition-all"><i
+                    data-lucide="git-branch" class="w-4 h-4"></i> Analysis</button>
+            <button
+                class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md hover:bg-white/5 text-textSecondary hover:text-white transition-all"><i
+                    data-lucide="key" class="w-4 h-4"></i> Credentials</button>
+            <button
+                class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md hover:bg-white/5 text-textSecondary hover:text-white transition-all"><i
+                    data-lucide="settings" class="w-4 h-4"></i> Settings</button>
+        </div>
+    </nav>
+
+    <!-- Zone 2: Main Workspace -->
+    <main class="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
+        <!-- Global Command Bar -->
+        <header
+            class="h-16 border-b border-border bg-black/40 backdrop-blur-md flex items-center justify-center px-6 w-full absolute top-0 z-20">
+            <div
+                class="w-full max-w-2xl bg-white/5 border border-border rounded-full flex items-center px-4 py-1.5 text-sm text-textSecondary transition-all hover:bg-white/10 focus-within:bg-white/10 focus-within:border-vercelBlue/50 focus-within:shadow-[0_0_15px_rgba(0,112,243,0.2)]">
+                <i data-lucide="search" class="w-4 h-4 mr-3"></i>
+                <input type="text" placeholder="/analyze, /scan, or search pipelines..."
+                    class="bg-transparent border-none outline-none w-full text-white placeholder-textSecondary/70">
+            </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto mt-16 p-8 lg:p-12">
+            <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+            <div class="max-w-5xl mx-auto space-y-10">
+                <div>
+                    <h2 class="text-3xl font-semibold tracking-tight mb-2">Pipeline Environment</h2>
+                    <p class="text-textSecondary text-[15px]">Detect and visualize telemetry flows dynamically using AI.
+                    </p>
+                </div>
+
+                <!-- Toggle Switch -->
+                <div class="flex justify-center">
+                    <div
+                        class="bg-surface border border-border p-1 rounded-xl flex items-center inline-flex relative overflow-hidden">
+                        <div id="toggle-bg"
+                            class="absolute w-[calc(50%-4px)] h-[calc(100%-8px)] rounded-lg bg-white/10 border border-white/5 shadow-sm transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.2)] left-1">
+                        </div>
+
+                        <button id="toggle-auto"
+                            class="relative z-10 w-48 py-2.5 text-sm font-medium rounded-lg text-white transition-colors flex items-center justify-center gap-2"
+                            onclick="setMode('auto')">
+                            <i data-lucide="sparkles" class="w-4 h-4 text-vercelBlue"></i> Auto Discovery
+                        </button>
+                        <button id="toggle-manual"
+                            class="relative z-10 w-48 py-2.5 text-sm font-medium rounded-lg text-textSecondary hover:text-white transition-colors flex items-center justify-center gap-2"
+                            onclick="setMode('manual')">
+                            <i data-lucide="code-2" class="w-4 h-4"></i> Manual Input
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Auto Discovery Zone -->
+                <div id="auto-zone" class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div
+                            class="p-5 rounded-2xl border border-border bg-surface hover:border-vercelBlue/40 transition-colors group cursor-default">
+                            <div
+                                class="w-10 h-10 rounded-lg bg-[#FF9900]/10 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                <i data-lucide="cloud" class="text-[#FF9900] w-5 h-5"></i>
+                            </div>
+                            <h3 class="font-medium text-[15px] mb-1">AWS Connected</h3>
+                            <p class="text-xs text-textSecondary">IAM Role active globally</p>
+                        </div>
+                    </div>
+
+                    <div
+                        class="relative rounded-2xl overflow-hidden border border-border bg-surface p-8 text-center mt-6">
+                        <div
+                            class="absolute inset-0 bg-gradient-to-b from-vercelBlue/5 to-transparent pointer-events-none">
+                        </div>
+                        <div class="relative z-10 flex flex-col items-center">
+                            <div class="w-16 h-16 rounded-full bg-vercelBlue/10 flex items-center justify-center mb-4">
+                                <i data-lucide="radar" class="text-vercelBlue w-8 h-8"></i>
+                            </div>
+                            <h3 class="text-xl font-semibold mb-2">Scan Live Environment</h3>
+                            <p class="text-textSecondary text-sm max-w-md mx-auto mb-6">Discover logical flows directly
+                                from the SDK.</p>
+
+                            <button id="live-scan-btn"
+                                class="relative group px-6 py-2.5 bg-white text-black font-medium text-sm rounded-full overflow-hidden transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+                                <span class="relative z-10 flex items-center gap-2 btn-text"><i data-lucide="scan"
+                                        class="w-4 h-4"></i> Execute Scan</span>
+                                <div
+                                    class="hidden absolute inset-0 bg-white/80 z-20 flex items-center justify-center spinner-container">
+                                    <div
+                                        class="w-5 h-5 border-2 border-black border-r-transparent rounded-full animate-spin">
+                                    </div>
+                                </div>
+                            </button>
+                            <div id="ai-loader-steps"
+                                class="hidden mt-6 text-sm text-textSecondary flex flex-col items-center gap-2 h-6 overflow-hidden">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Manual Zone (hidden initially) -->
+                <div id="manual-zone" class="hidden space-y-6">
+                    <form id="analyze-form" class="space-y-6">
+                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
+                            <div
+                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
+                                metadata.json</div>
+                            <textarea id="metadata" class="w-full bg-transparent p-4 text-sm font-mono text-white"
+                                placeholder='{}'></textarea>
+                        </div>
+                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
+                            <div
+                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
+                                config.json</div>
+                            <textarea id="config" class="w-full bg-transparent p-4 text-sm font-mono text-white"
+                                placeholder='{}'></textarea>
+                        </div>
+                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
+                            <div
+                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
+                                raw.json</div>
+                            <textarea id="raw_json" class="w-full bg-transparent p-4 text-sm font-mono text-white"
+                                placeholder='{}'></textarea>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm font-medium"><input
+                                    type="checkbox" id="use_llm" class="rounded border-border bg-surface"> Use AI
+                                Inference</label>
+                            <button type="submit"
+                                class="relative group px-5 py-2.5 bg-white text-black text-sm rounded-full font-medium shadow-lg hover:scale-105 active:scale-95 transition-all min-w-[120px]">
+                                <span class="btn-text">Parse JSON</span>
+                                <div
+                                    class="hidden absolute inset-0 bg-white/80 z-20 flex items-center justify-center spinner-container">
+                                    <div
+                                        class="w-4 h-4 border-2 border-black border-r-transparent rounded-full animate-spin">
+                                    </div>
+                                </div>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Results -->
+                <div id="results-panel" class="hidden mt-12 pt-8 border-t border-border pb-20">
+                    <h3 class="text-2xl font-semibold mb-6 flex items-center gap-2"><i data-lucide="git-merge"
+                            class="text-vercelBlue"></i> Interactive Flow</h3>
+
+                    <div
+                        class="w-full rounded-2xl border border-border bg-black/40 overflow-hidden shadow-2xl relative mb-8 group">
+                        <div
+                            class="absolute inset-0 opacity-10 [background-image:radial-gradient(#2E2E2E_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none">
+                        </div>
+
+                        <!-- Graph Controls -->
+                        <div class="absolute top-4 right-4 z-20 flex flex-col gap-2">
+                            <button onclick="resetZoom()"
+                                class="p-2 rounded-lg bg-surface/80 border border-border text-textSecondary hover:text-white transition-colors"
+                                title="Reset Zoom"><i data-lucide="maximize" class="w-4 h-4"></i></button>
+                        </div>
+
+                        <!-- Legend -->
+                        <div
+                            class="absolute bottom-4 left-4 z-20 flex items-center gap-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-border text-[10px] font-medium tracking-wider uppercase text-textSecondary">
+                            <div class="flex items-center gap-1.5">
+                                <div class="w-2 h-2 rounded-full bg-vercelBlue"></div> Source
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <div class="w-2 h-2 rounded-full bg-vercelPurple"></div> Compute
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <div class="w-2 h-2 rounded-full bg-emerald-500"></div> Storage
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <div class="w-2 h-2 rounded-full bg-red-500"></div> Error
+                            </div>
+                        </div>
+
+                        <div id="graph-container"
+                            class="w-full min-h-[500px] h-full relative cursor-grab active:cursor-grabbing">
+                            <svg id="graph-svg" class="w-full h-[500px]"></svg>
+                        </div>
+                    </div>
+
+                    <h3 class="text-lg font-medium mb-4">Discovered Assets</h3>
+                    <div id="results-content" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-12"></div>
+
+                    <!-- Detailed Configs Section -->
+                    <div id="detailed-configs-panel" class="hidden border-t border-border pt-12 space-y-8">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h3 class="text-2xl font-semibold tracking-tight">Detailed Service Configurations</h3>
+                                <p class="text-textSecondary text-sm mt-1">Deep-extracted properties and raw metadata
+                                    for all discovered resources.</p>
+                            </div>
+                            <div class="relative max-w-xs w-full">
+                                <i data-lucide="search"
+                                    class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-textSecondary"></i>
+                                <input type="text" id="config-search" placeholder="Filter configurations..."
+                                    class="w-full bg-surface border border-border rounded-lg pl-9 pr-4 py-2 text-sm focus:border-vercelBlue/50 outline-none transition-all">
+                            </div>
+                        </div>
+                        <div id="detailed-configs-grid" class="grid grid-cols-1 gap-6"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Zone 3: Panel -->
+    <aside
+        class="w-[320px] flex-shrink-0 border-l border-border bg-surface/30 backdrop-blur-md flex flex-col h-full right-0 z-20">
+        <div class="h-16 flex items-center px-5 border-b border-border">
+            <h2 class="font-medium text-[14px] flex items-center gap-2"><i data-lucide="bot"
+                    class="text-vercelPurple"></i> Intelligence Panel</h2>
+        </div>
+        <div class="flex-1 p-5 overflow-y-auto">
+            <div class="bg-black/50 border border-border rounded-xl p-4 mb-6">
+                <h3 class="text-[11px] uppercase tracking-widest text-textSecondary mb-3 font-semibold">Synthesis</h3>
+                <div id="narrative-summary" class="text-sm leading-relaxed">Awaiting scan...</div>
+            </div>
+
+            <div id="evidence-panel" class="hidden mt-6">
+                <h3 class="text-[11px] uppercase tracking-widest text-textSecondary mb-3 font-semibold">Live Scan
+                    Evidence</h3>
+                <pre id="evidence-pre"
+                    class="text-[10px] text-textSecondary bg-black border border-border rounded p-3 overflow-x-auto custom-scrollbar font-mono"></pre>
+            </div>
+        </div>
+        <div class="p-4 bg-gradient-to-t from-black to-transparent">
+            <button
+                class="w-full bg-white/5 border border-border rounded-lg p-3 text-sm flex items-center gap-3 text-textSecondary hover:bg-white/10 transition-colors"><i
+                    data-lucide="sparkles" class="w-4 h-4"></i> Generate insights...</button>
+        </div>
+    </aside>
+
+    <script src="/static/app.js?v=2.1"></script>
+    <script>lucide.createIcons();</script>
+</body>
+
+</html>

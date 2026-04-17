@@ -1,0 +1,25 @@
+{
+    "metadata": {
+        "platform": "aws",
+        "name": "serverless-ingestion-api",
+        "description": "API Gateway triggering Lambda which writes to S3"
+    },
+    "config": {
+        "endpoint": "https://api123.execute-api.us-east-1.amazonaws.com/Prod/ingest",
+        "destination": "s3://simple-pipeline-data-bucket-12345/raw-ingest/"
+    },
+    "raw_json": {
+        "type": "AWS::Serverless::Function",
+        "events": {
+            "ApiEvent": {
+                "Type": "Api",
+                "Method": "post"
+            }
+        },
+        "environment": {
+            "variables": {
+                "BUCKET_NAME": "simple-pipeline-data-bucket-12345"
+            }
+        }
+    }
+}

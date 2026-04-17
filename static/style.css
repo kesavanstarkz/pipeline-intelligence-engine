@@ -1,0 +1,107 @@
+/* Custom Overrides for standard tailwind components */
+
+/* Custom Scrollbar for dark theme */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #2E2E2E;
+    border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Base override for body to hide default browser scrollbars */
+body::-webkit-scrollbar {
+    width: 0;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 100px;
+}
+
+/* Graph Node & Edge Styles */
+.node rect {
+    stroke: #2E2E2E;
+    fill: #111111;
+    stroke-width: 1.5px;
+    rx: 12;
+    ry: 12;
+    transition: all 0.3s ease;
+}
+
+.node:hover rect {
+    stroke: #0070F3;
+    filter: drop-shadow(0 0 8px rgba(0, 112, 243, 0.4));
+    transform: translateY(-2px);
+}
+
+.node .label {
+    font-family: 'Inter', sans-serif;
+    color: #EDEDED;
+}
+
+.edgePath path {
+    stroke: #2E2E2E;
+    stroke-width: 1.5px;
+    fill: none;
+    transition: stroke 0.3s ease;
+}
+
+.node:hover + .edgePath path,
+.edgePath:hover path {
+    stroke: #0070F3;
+    stroke-width: 2px;
+}
+
+/* Marker (Arrowhead) */
+#marker-arrow {
+    fill: #2E2E2E;
+}
+
+/* Typography Hierarchy */
+.node-title {
+    font-size: 14px;
+    font-weight: 500;
+    fill: #EDEDED;
+}
+
+.node-subtitle {
+    font-size: 11px;
+    font-weight: 300;
+    fill: #A1A1AA;
+}
+
+.node-badge {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+/* Animations */
+@keyframes flow {
+    from { stroke-dashoffset: 20; }
+    to { stroke-dashoffset: 0; }
+}
+
+.edgePath.active path {
+    stroke: #0070F3;
+    stroke-dasharray: 4, 4;
+    animation: flow 1s linear infinite;
+}
+
+/* Spinner */
+.spinner-container .animate-spin {
+    border-color: rgba(255,255,255,0.3);
+    border-top-color: white;
+}
+#live-scan-btn .spinner-container .animate-spin {
+    border-color: rgba(0,0,0,0.3);
+    border-top-color: black;
+}
