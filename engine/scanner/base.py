@@ -11,7 +11,7 @@ class CloudScanner(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def scan(self, settings: Any) -> Dict[str, List[str]]:
+    def scan(self, settings: Any, **kwargs) -> Dict[str, List[str]]:
         """
         Scan the cloud environment and return discoveries mapped by our schema:
         {

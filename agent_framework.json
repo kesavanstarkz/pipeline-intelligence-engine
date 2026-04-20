@@ -1,0 +1,81 @@
+{
+  "framework_name": "Pipeline Intelligence Engine (PIE)",
+  "version": "1.0.0",
+  "description": "Deep Agentic Detection & Extraction Framework for Multi-Cloud Data Pipelines",
+  "agent_manifesto": {
+    "mission": "To extract precise, evidence-backed architectural intelligence from cloud environments and code.",
+    "core_principles": [
+      "Accuracy > Completeness",
+      "No assumptions or guesses—verified data only",
+      "Traceability of every result to evidence",
+      "Cloud-agnostic by design"
+    ],
+    "extraction_directives": [
+      "SOURCE: Identify entry points (APIs, Event Triggers, Queues)",
+      "INGESTION: Identify compute layers (Lambda, Glue, ADF, Spark)",
+      "TARGET: Identify data sinks (S3, Redshift, Snowflake, Fabric)",
+      "DQ: Identify validation layers (Great Expectations, SQL checks)"
+    ]
+  },
+  "detection_patterns": {
+    "frameworks": [
+      { "name": "AWS Glue", "patterns": ["\\bglue\\b", "gluejob", "glue_job", "aws.*glue", "glue.*crawler"] },
+      { "name": "Amazon Redshift", "patterns": ["\\bredshift\\b", "redshift_cluster", "jdbc.*redshift"] },
+      { "name": "Amazon EMR", "patterns": ["\\bemr\\b", "elastic.?map.?reduce", "emr_cluster"] },
+      { "name": "Amazon Athena", "patterns": ["\\bathena\\b", "aws.*athena"] },
+      { "name": "Azure Data Factory", "patterns": ["\\badf\\b", "azure.?data.?factory", "datafactory", "adf_pipeline"] },
+      { "name": "Azure Synapse", "patterns": ["\\bsynapse\\b", "synapse_analytics", "azure.?synapse"] },
+      { "name": "Azure ADLS", "patterns": ["\\badls\\b", "data.?lake.?storage", "abfss://", "wasbs://"] },
+      { "name": "Snowflake", "patterns": ["snowflake", "snowflake_connector", "snowflakecomputing"] },
+      { "name": "Databricks", "patterns": ["\\bdatabricks\\b", "dbfs://", "databricks_cluster", "dbx"] },
+      { "name": "Apache Spark", "patterns": ["\\bspark\\b", "pyspark", "sparksession", "spark_job"] },
+      { "name": "Apache Kafka", "patterns": ["\\bkafka\\b", "kafka_topic", "confluent"] },
+      { "name": "Apache Airflow", "patterns": ["\\bairflow\\b", "dag\\b", "airflow_dag"] },
+      { "name": "dbt", "patterns": ["\\bdbt\\b", "dbt_project", "dbt_model"] }
+    ],
+    "sources": [
+      { "name": "S3", "patterns": ["s3://", "s3a://", "s3n://", "\\baws.*s3\\b", "boto3.*s3"] },
+      { "name": "REST API", "patterns": ["https?://.*api\\.", "rest.*api", "requests\\.get\\(", "httpx\\.", "openapi"] },
+      { "name": "Kafka Topic", "patterns": ["kafka.*topic", "bootstrap.*servers", "confluent.*topic"] },
+      { "name": "JDBC/PostgreSQL", "patterns": ["jdbc:postgresql", "psycopg2", "postgres.*conn"] },
+      { "name": "JDBC/MySQL", "patterns": ["jdbc:mysql", "pymysql", "mysql.*connector"] }
+    ],
+    "ingestion_engines": [
+      { "name": "AWS Glue Jobs", "patterns": ["gluejob", "glue_job", "aws_glue", "glue.*crawler"] },
+      { "name": "ADF Pipelines", "patterns": ["adf_pipeline", "azure.*data.*factory.*pipeline"] },
+      { "name": "AWS Lambda ETL", "patterns": ["lambda.*handler", "aws.*lambda.*etl"] },
+      { "name": "Apache Airflow DAGs", "patterns": ["dag_id", "\\bdag\\b", "airflow", "@dag\\b"] }
+    ],
+    "data_quality": {
+      "ge_expectations": {
+        "expect_column_values_to_not_be_null": "GE: Not Null check",
+        "expect_column_values_to_be_unique": "GE: Uniqueness check",
+        "expect_column_values_to_be_between": "GE: Range check"
+      },
+      "sql_assertions": [
+        { "name": "SQL: Row count assertion", "pattern": "count\\s*\\(\\s*\\*\\s*\\)\\s*(>|<|=|!=|>=|<=)\\s*\\d+" },
+        { "name": "SQL: Null check", "pattern": "where\\s+\\w+\\s+is\\s+null" }
+      ],
+      "third_party_tools": [
+        { "name": "Soda DQ", "pattern": "\\bsoda\\b" },
+        { "name": "Monte Carlo", "pattern": "monte.?carlo" }
+      ]
+    }
+  },
+  "extraction_schema": {
+    "response_model": "AnalyzeResponse",
+    "fields": {
+      "framework": "List[str] (Detected data platform frameworks)",
+      "source": "List[str] (Detected data sources)",
+      "ingestion": "List[str] (Detected ingestion engines / orchestrators)",
+      "dq_rules": "List[str] (Detected data quality rules / frameworks)",
+      "confidence": "Dict[str, float] (Category confidence 0–1)",
+      "detailed_inventory": "List[Dict] (Full cloud resource configurations)",
+      "expert_extraction": "Dict (Strict, evidence-backed extraction results)"
+    }
+  },
+  "combination_rules": [
+    { "required": ["AWS Glue", "Amazon Redshift"], "label": "Combo: Glue → Redshift" },
+    { "required": ["Azure Data Factory", "Databricks"], "label": "Combo: ADF → Databricks" }
+  ]
+}

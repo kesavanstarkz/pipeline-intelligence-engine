@@ -14,7 +14,13 @@ from typing import Any, Dict, List, Optional
 from engine.datahub_client import DataHubClient, datahub_client as _default_client
 from engine.detectors.base import AnalysisPayload, DetectionResult
 from engine.registry import get_all_detectors
-from engine.config_extractor import extract_source_configs, extract_ingestion_configs, extract_expert_config
+from engine.config_extractor import (
+    extract_dq_configs,
+    extract_expert_config,
+    extract_ingestion_configs,
+    extract_source_configs,
+    extract_storage_configs,
+)
 from llm.inference import llm_infer
 
 logger = logging.getLogger(__name__)
@@ -174,6 +180,10 @@ class PipelineIntelligenceEngine:
         ) or None
         res.ingestion_config = extract_ingestion_configs(
             category_results["ingestion"], payload
+        ) or None
+        res.storage_config = extract_storage_configs(payload) or None
+        res.dq_config = extract_dq_configs(
+            payload, category_results["dq_rules"]
         ) or None
         res.expert_extraction = extract_expert_config(payload) or None
 

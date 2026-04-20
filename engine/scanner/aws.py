@@ -15,7 +15,7 @@ class AWSScanner(CloudScanner):
     def can_scan(self, settings: Any) -> bool:
         return bool(settings.aws_access_key_id and settings.aws_secret_access_key)
 
-    def scan(self, settings: Any) -> Dict[str, List[str]]:
+    def scan(self, settings: Any, **kwargs) -> Dict[str, List[str]]:
         raw_assets: Dict[str, List[str]] = {}
         
         if not boto3:
@@ -53,19 +53,35 @@ class AWSScanner(CloudScanner):
                     if region == "us-east-1":
                         buckets = s3.list_buckets().get("Buckets", [])
                         for b in buckets:
+                            b_name = b.get('Name')
                             # Deep S3 Inspection
                             config = {
                                 "CreationDate": str(b.get('CreationDate', '')),
                                 "StorageClass": "Standard",
-                                "IsPublic": str(False)
+                                "IsPublic": "Check Failure"
                             }
+                            # Fetch Public Access Block Status
                             try:
-                                v_status = s3.get_bucket_versioning(Bucket=b['Name']).get('Status', 'Disabled')
+                                pab = s3.get_public_access_block(Bucket=b_name).get('PublicAccessBlockConfiguration', {})
+                                config["IsPublic"] = str(not all(pab.values()))
+                                config["PublicAccessBlock"] = pab
+                            except: pass
+                            
+                            # Fetch Policy Summary
+                            try:
+                                policy = s3.get_bucket_policy(Bucket=b_name).get('Policy')
+                                if policy:
+                                    config["HasPolicy"] = True
+                                    config["PolicyLength"] = len(policy)
+                            except: pass
+                            
+                            try:
+                                v_status = s3.get_bucket_versioning(Bucket=b_name).get('Status', 'Disabled')
                                 config["Versioning"] = v_status
                             except Exception: pass
                             
                             try:
-                                enc = s3.get_bucket_encryption(Bucket=b['Name']).get('ServerSideEncryptionConfiguration', {})
+                                enc = s3.get_bucket_encryption(Bucket=b_name).get('ServerSideEncryptionConfiguration', {})
                                 config["Encryption"] = "Enabled" if enc else "Disabled"
                             except Exception: config["Encryption"] = "Disabled"
 

@@ -41,6 +41,21 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class WorkspaceDiscoverRequest(BaseModel):
+    """POST /discover/workspace — scan a folder on the API host (repo, pipelines, configs)."""
+
+    root_path: str = Field(
+        ...,
+        description="Absolute or relative path to a directory to inspect (must be under allowed roots)",
+    )
+    max_depth: int = Field(default=6, ge=1, le=20)
+    max_files_recorded: int = Field(default=400, ge=10, le=5000)
+    use_llm: bool = Field(
+        default=False,
+        description="If true and server LLM is enabled, run LLM synthesis after rule-based detection",
+    )
+
+
 class ConfidenceScores(BaseModel):
     framework: Optional[float] = None
     source: Optional[float] = None

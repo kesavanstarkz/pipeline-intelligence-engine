@@ -88,7 +88,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 3000);
 
             try {
-                const response = await fetch('/scan-cloud', {
+                // Pass selected providers as a query string
+                const providerQuery = Array.from(selectedProviders).join(',');
+                console.log(`[Scan Triggered] Providers: ${providerQuery || 'ALL'}`);
+                
+                const useLlmScan = document.getElementById('scan-use-llm')?.checked;
+                const llmParam = useLlmScan ? '&use_llm=true' : '';
+                const response = await fetch(`/scan-cloud?providers=${providerQuery}${llmParam}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -110,6 +116,44 @@ document.addEventListener('DOMContentLoaded', () => {
                 spinner.classList.add('hidden');
                 liveScanBtn.disabled = false;
                 aiLoaderSteps.classList.add('hidden');
+            }
+        });
+    }
+
+    // --- Local workspace discovery (server-side path) ---
+    const workspaceDiscoverBtn = document.getElementById('workspace-discover-btn');
+    if (workspaceDiscoverBtn) {
+        workspaceDiscoverBtn.addEventListener('click', async () => {
+            const root = document.getElementById('workspace-path')?.value?.trim();
+            if (!root) {
+                showToast('Enter a folder path on the server', 'error');
+                return;
+            }
+            const resultsPanel = document.getElementById('results-panel');
+            const useLlm = document.getElementById('workspace-use-llm')?.checked;
+            workspaceDiscoverBtn.disabled = true;
+            try {
+                const response = await fetch('/discover/workspace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        root_path: root,
+                        max_depth: 6,
+                        max_files_recorded: 400,
+                        use_llm: !!useLlm,
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Discovery failed');
+                }
+                renderResults(data);
+                showToast('Folder discovery complete');
+                resultsPanel?.classList.remove('hidden');
+            } catch (e) {
+                showToast(e.message || 'Discovery failed', 'error');
+            } finally {
+                workspaceDiscoverBtn.disabled = false;
             }
         });
     }
@@ -169,7 +213,12 @@ document.addEventListener('DOMContentLoaded', () => {
         'apigateway': { label: 'API Gateway', icon: 'zap', color: '#0070F3', category: 'Source' },
         'glue': { label: 'Glue Job', icon: 'layers', color: '#FF9900', category: 'Compute' },
         'redshift': { label: 'Redshift', icon: 'box', color: '#8C4FFF', category: 'Storage' },
-        'stepfunctions': { label: 'Step Function', icon: 'git-merge', color: '#FF4F8B', category: 'Compute' }
+        'stepfunctions': { label: 'Step Function', icon: 'git-merge', color: '#FF4F8B', category: 'Compute' },
+        'storage_accounts': { label: 'Storage Account', icon: 'database', color: '#0078D4', category: 'Storage' },
+        'datafactory': { label: 'Data Factory', icon: 'git-branch', color: '#0078D4', category: 'Compute' },
+        'functions': { label: 'Azure Function', icon: 'zap', color: '#0078D4', category: 'Compute' },
+        'fabric': { label: 'Fabric Item', icon: 'layers', color: '#6B46C1', category: 'Compute' },
+        'fabric_workspaces': { label: 'Fabric Workspace', icon: 'layout', color: '#6B46C1', category: 'Storage' }
     };
 
     function simplifyName(rawName, fallbackType = 'lambda') {
@@ -233,6 +282,109 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     window.resetZoom = resetZoom;
 
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderConfigValue(value) {
+        if (value === null || value === undefined || value === '') {
+            return '<span class="text-textSecondary italic">n/a</span>';
+        }
+        if (Array.isArray(value)) {
+            if (value.length === 0) {
+                return '<span class="text-textSecondary italic">n/a</span>';
+            }
+            return `<div class="flex flex-wrap gap-1 justify-end">${value.map(item => `<span class="px-1.5 py-0.5 bg-white/10 rounded text-[10px] text-white">${escapeHtml(item)}</span>`).join('')}</div>`;
+        }
+        if (typeof value === 'object') {
+            return `<pre class="text-[10px] text-white/90 font-mono whitespace-pre-wrap break-words">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+        return `<span class="text-white">${escapeHtml(value)}</span>`;
+    }
+
+    function renderConfigSectionMap(sectionMap) {
+        const entries = Object.entries(sectionMap || {});
+        if (entries.length === 0) {
+            return '<div class="p-8 text-sm text-textSecondary italic">No extracted config available.</div>';
+        }
+
+        return entries.map(([sectionName, config]) => {
+            const rows = Object.entries(config || {}).map(([key, value]) => `
+                <div class="flex justify-between items-start gap-6 py-2.5 border-b border-white/5 last:border-0">
+                    <div class="text-[10px] uppercase tracking-wider text-textSecondary font-semibold shrink-0">${escapeHtml(key.replace(/_/g, ' '))}</div>
+                    <div class="text-right text-xs flex-1">${renderConfigValue(value)}</div>
+                </div>
+            `).join('');
+
+            return `
+                <div class="border-b border-border last:border-0">
+                    <div class="px-5 py-3 bg-black/30 border-b border-white/5">
+                        <div class="text-sm font-semibold text-white">${escapeHtml(sectionName)}</div>
+                    </div>
+                    <div class="px-5 py-3 bg-black/20">
+                        ${rows || '<div class="text-sm text-textSecondary italic">No extracted properties.</div>'}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderExtractedConfigTabs(data) {
+        const panel = document.getElementById('extracted-config-tabs-panel');
+        const buttons = document.getElementById('config-tab-buttons');
+        const content = document.getElementById('config-tab-content');
+        if (!panel || !buttons || !content) return;
+
+        const tabs = [
+            { id: 'source', label: 'Source', icon: 'database', data: data.source_config || {} },
+            { id: 'ingestion', label: 'Ingestion', icon: 'cpu', data: data.ingestion_config || {} },
+            { id: 'storage', label: 'Storage', icon: 'hard-drive', data: data.storage_config || {} },
+            { id: 'dq', label: 'DQ', icon: 'shield-check', data: data.dq_config || {} },
+        ].filter(tab => Object.keys(tab.data).length > 0);
+
+        if (tabs.length === 0) {
+            panel.classList.add('hidden');
+            buttons.innerHTML = '';
+            content.innerHTML = '';
+            return;
+        }
+
+        panel.classList.remove('hidden');
+
+        const activate = (tabId) => {
+            tabs.forEach(tab => {
+                const btn = buttons.querySelector(`[data-tab="${tab.id}"]`);
+                if (!btn) return;
+                if (tab.id === tabId) {
+                    btn.className = 'px-3 py-1.5 rounded-lg bg-vercelBlue/20 border border-vercelBlue/40 text-vercelBlue text-xs font-semibold';
+                    content.innerHTML = renderConfigSectionMap(tab.data);
+                } else {
+                    btn.className = 'px-3 py-1.5 rounded-lg bg-white/5 border border-border text-textSecondary text-xs font-semibold hover:text-white';
+                }
+            });
+        };
+
+        buttons.innerHTML = tabs.map(tab => `
+            <button type="button" data-tab="${tab.id}" class="px-3 py-1.5 rounded-lg bg-white/5 border border-border text-textSecondary text-xs font-semibold hover:text-white flex items-center gap-1.5">
+                <i data-lucide="${tab.icon}" class="w-3.5 h-3.5"></i>${tab.label}
+            </button>
+        `).join('');
+        lucide.createIcons({ root: buttons });
+
+        tabs.forEach(tab => {
+            const btn = buttons.querySelector(`[data-tab="${tab.id}"]`);
+            if (btn) btn.onclick = () => activate(tab.id);
+        });
+
+        activate(tabs[0].id);
+        lucide.createIcons({ root: content });
+    }
+
     async function renderResults(data) {
         const resultsPanel = document.getElementById('results-panel');
         const resultsContent = document.getElementById('results-content');
@@ -265,6 +417,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.evidence && data.evidence['Live Scan Telemetry Extract']) {
             evidencePanel.classList.remove('hidden');
             evidencePre.textContent = data.evidence['Live Scan Telemetry Extract'].join('\n');
+        } else if (data.evidence && data.evidence['local_discovery'] && Array.isArray(data.evidence['local_discovery'])) {
+            evidencePanel.classList.remove('hidden');
+            evidencePre.textContent = data.evidence['local_discovery'].join('\n');
         }
 
         // --- 2. D3 Graph Generation ---
@@ -379,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 ${simplified.category || 'Asset'}
                             </div>
                             <div class="flex items-center gap-2 mt-1">
-                                <div class="w-2 h-2 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)]" style="background: ${config.color}"></div>
+                                <div class="w-2 h-2 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)]" style="background: ${styleConfig.color}"></div>
                                 <span class="node-title font-medium text-white truncate max-w-[140px] text-sm">${simplified.title}</span>
                             </div>
                             <div class="flex flex-col gap-0.5">
@@ -621,7 +776,10 @@ document.addEventListener('DOMContentLoaded', () => {
         
         lucide.createIcons({ root: resultsContent });
 
-        // --- 4. Detailed Configs Rendering ---
+        // --- 4. Extracted config tabs ---
+        renderExtractedConfigTabs(data);
+
+        // --- 5. Detailed Configs Rendering ---
         renderDetailedConfigs(data);
     }
 
@@ -709,6 +867,190 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.copyToClipboard = (text) => {
         navigator.clipboard.writeText(text);
-        // We could show a tiny toast here too
+        showToast('Copied to clipboard');
+    };
+
+    // Check for success/errors in URL (e.g., from SSO redirect)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('error')) {
+        showToast(urlParams.get('error'), 'error');
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    if (urlParams.has('success')) {
+        showToast(urlParams.get('success'), 'success');
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    // Handle Login Button Logic
+    const btnLogin = document.getElementById('btn-login');
+    if (btnLogin) {
+        btnLogin.addEventListener('click', async () => {
+            const resp = await fetch('/api/config/keys');
+            const keys = await resp.json();
+            
+            // If Client ID (Azure) is not configured, use the "Browser SSO" flow
+            if (!keys.azure_client_id_active) {
+                window.location.href = '/browser-login';
+            } else {
+                window.location.href = '/login';
+            }
+        });
+    }
+
+    // --- 5. SSO Identity Logic ---
+    async function checkAuthStatus() {
+        try {
+            // Check session auth
+            const hRes = await fetch('/health');
+            const hData = await hRes.json();
+            
+            // Check configured keys
+            const kRes = await fetch('/api/config/keys');
+            const kData = await kRes.json();
+            
+            const userInfo = document.getElementById('user-info');
+            const loginCta = document.getElementById('login-cta');
+            const userName = document.getElementById('user-name');
+            const userInitials = document.getElementById('user-initials');
+            
+            // Azure Status Card elements
+            const azureTitle = document.getElementById('azure-status-title');
+            const azureText = document.getElementById('azure-status-text');
+            const azureCard = document.getElementById('azure-status-card');
+
+            if (hData.user) {
+                // User is logged in via SSO
+                const name = hData.user.name || hData.user.preferred_username || "User";
+                userName.textContent = name;
+                userInitials.textContent = name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
+                
+                userInfo.classList.remove('hidden');
+                loginCta.classList.add('hidden');
+                
+                azureTitle.textContent = "Azure Active (SSO)";
+                azureText.textContent = `Acting as ${name}`;
+                providerStatus.azure = 'sso';
+                providerStatus.fabric = 'ready'; // Fabric uses same SSO token
+            } else {
+                userInfo.classList.add('hidden');
+                loginCta.classList.remove('hidden');
+                
+                if (kData.azure) {
+                    azureTitle.textContent = "Azure Service Principal";
+                    azureText.textContent = "ID/Secret active in .env";
+                    providerStatus.azure = 'sp';
+                    providerStatus.fabric = 'ready';
+                } else {
+                    azureTitle.textContent = "Azure Discovery";
+                    azureText.textContent = "Not configured in .env";
+                    providerStatus.azure = 'none';
+                    providerStatus.fabric = 'none';
+                }
+            }
+            syncProviderCards();
+        } catch (error) {
+            console.error("Auth check failed:", error);
+        }
+    }
+
+    checkAuthStatus();
+
+    // --- 6. Provider Selection Logic ---
+    const selectedProviders = new Set([]); 
+    const providerStatus = { aws: 'ready', azure: 'none', fabric: 'ready' };
+
+    function syncProviderCards() {
+        ['aws', 'azure', 'fabric'].forEach(id => {
+            const card = document.getElementById(`card-${id}`);
+            const check = document.getElementById(`check-${id}`);
+            if (!card) return;
+
+            const isSelected = selectedProviders.has(id);
+            const isReady = providerStatus[id] !== 'none';
+
+            // Reset classes
+            card.classList.remove('border-vercelBlue', 'border-vercelBlue/40', 'bg-vercelBlue/5', 'border-border', 'opacity-60');
+
+            if (isSelected) {
+                card.classList.add('border-vercelBlue', 'bg-vercelBlue/5');
+            } else if (isReady) {
+                card.classList.add('border-vercelBlue/20');
+            } else {
+                card.classList.add('border-border', 'opacity-60');
+            }
+
+            if (check) {
+                if (isSelected) check.classList.remove('hidden');
+                else check.classList.add('hidden');
+            }
+        });
+    }
+
+    function setupProviderEvents() {
+        ['aws', 'azure', 'fabric'].forEach(id => {
+            const card = document.getElementById(`card-${id}`);
+            if (card) {
+                card.onclick = (e) => {
+                    // Prevent multiple rapid clicks
+                    if (card.dataset.clicking) return;
+                    card.dataset.clicking = "true";
+                    setTimeout(() => delete card.dataset.clicking, 200);
+
+                    if (selectedProviders.has(id)) {
+                        selectedProviders.delete(id);
+                    } else {
+                        selectedProviders.add(id);
+                    }
+                    console.log(`Toggled ${id}. Current selection:`, Array.from(selectedProviders));
+                    syncProviderCards();
+                };
+            }
+        });
+    }
+
+    setupProviderEvents();
+    syncProviderCards();
+
+    window.executeScan = async () => {
+        const btn = document.querySelector('button[onclick="executeScan()"]');
+        if (!btn) return;
+        
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = `<span class="animate-spin mr-2">◌</span> Scanning...`;
+        btn.disabled = true;
+
+        // Show spinners for all selected providers
+        selectedProviders.forEach(p => {
+            const spinner = document.getElementById(`spinner-${p}`);
+            if (spinner) spinner.classList.remove('hidden');
+        });
+
+        try {
+            const providerQuery = Array.from(selectedProviders).join(',');
+            const useLlmScan = document.getElementById('scan-use-llm')?.checked;
+            const llmParam = useLlmScan ? '&use_llm=true' : '';
+            const response = await fetch(`/scan-cloud?providers=${providerQuery}${llmParam}`, { method: 'POST' });
+            const data = await response.json();
+            
+            if (response.ok) {
+                renderGraph(data);
+                renderNarrative(data);
+                renderDiscoveryGrid(data);
+                showToast(`Scan complete: ${providerQuery || 'all'}`, 'success');
+            } else {
+                showToast(data.detail || 'Scan failed', 'error');
+            }
+        } catch (error) {
+            console.error(error);
+            showToast('Connection error during scan', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            // Hide all spinners
+            ['aws', 'azure', 'gcp'].forEach(p => {
+                const spinner = document.getElementById(`spinner-${p}`);
+                if (spinner) spinner.classList.add('hidden');
+            });
+        }
     };
 });

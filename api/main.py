@@ -3,6 +3,8 @@ Pipeline Intelligence Engine — FastAPI Application
 ───────────────────────────────────────────────────
 Routes:
   POST /analyze       — main analysis endpoint
+  POST /discover/workspace — scan a local folder on the API host and infer config
+  POST /scan-cloud    — live cloud discovery
   GET  /health        — liveness + DataHub connectivity check
   GET  /detectors     — list registered detectors
   GET  /docs          — Swagger UI (auto-generated)
@@ -18,11 +20,14 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from api.models import AnalyzeRequest, AnalyzeResponse
+from api.models import AnalyzeRequest, AnalyzeResponse, WorkspaceDiscoverRequest
 from config.settings import settings
 from engine.datahub_client import datahub_client
 from engine.pipeline_engine import PipelineIntelligenceEngine
 from engine.registry import get_all_detectors
+from engine.discovery.local_scanner import resolve_safe_root, scan_local_workspace
+from api.auth import router as auth_router
+from starlette.middleware.sessions import SessionMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,11 +53,13 @@ app = FastAPI(
     title=settings.app_title,
     version=settings.app_version,
     description=(
-        "External detection layer that analyzes any data pipeline and extracts "
-        "frameworks, sources, ingestion engines, and DQ rules using DataHub."
+        "Pipeline Intelligence Engine API"
     ),
-    lifespan=lifespan,
+    lifespan=lifespan
 )
+
+app.add_middleware(SessionMiddleware, secret_key=settings.app_secret_key)
+app.include_router(auth_router)
 
 # Mount static files
 import os
@@ -83,7 +90,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     All three input fields (`metadata`, `config`, `raw_json`) are optional — 
     submit whatever is available and the engine will infer the rest.
     """
-    use_llm = request.use_llm or settings.llm_enabled
+    # LLM runs only when the client opts in AND the server allows it (see .kiro spec).
+    use_llm = bool(request.use_llm and settings.llm_enabled)
 
     try:
         result = _engine.analyze(
@@ -112,7 +120,93 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         source_config=result.source_config,
         ingestion_config=result.ingestion_config,
         detailed_inventory=result.detailed_inventory,
-        expert_extraction=result.expert_extraction
+        expert_extraction=result.expert_extraction,
+        nodes=result.nodes,
+        flow=result.flow,
+        storage_config=result.storage_config,
+        dq_config=result.dq_config,
+        validation=result.validation,
+    )
+
+
+@app.post(
+    "/discover/workspace",
+    response_model=AnalyzeResponse,
+    summary="Scan a local folder (repo, configs, pipeline dirs) and infer ingestion config",
+)
+async def discover_workspace(body: WorkspaceDiscoverRequest) -> AnalyzeResponse:
+    """
+    Walk a directory on the **API host** (not the browser), detect frameworks and
+    important paths, and return the same shape as ``/analyze`` including generated
+    ingestion config suggestions.
+    """
+    try:
+        safe_root = resolve_safe_root(body.root_path, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    disc = scan_local_workspace(
+        safe_root,
+        max_depth=body.max_depth,
+        max_files_recorded=body.max_files_recorded,
+    )
+    use_llm = bool(body.use_llm and settings.llm_enabled)
+
+    metadata: Dict[str, Any] = {
+        "source": "local_workspace_scan",
+        "root": str(safe_root),
+        "discovered_framework_hints": disc["frameworks"],
+    }
+    config: Dict[str, Any] = {
+        "generated_ingestion_config": disc["generated_ingestion_config"],
+    }
+    raw_json: Dict[str, Any] = {
+        "local_discovery": disc,
+        "discovery_text": " ".join(disc["frameworks"])
+        + "\n"
+        + "\n".join(disc["evidence"][:120]),
+    }
+
+    try:
+        result = _engine.analyze(
+            metadata=metadata,
+            config=config,
+            raw_json=raw_json,
+            use_llm=use_llm,
+        )
+    except Exception as exc:
+        logger.exception("Workspace discovery failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Workspace discovery failed: {exc}",
+        ) from exc
+
+    ev = dict(result.evidence or {})
+    ev["local_discovery"] = disc["evidence"][:100]
+    ev["generated_config"] = [
+        f"Inferred {disc['stats']['framework_hint_count']} framework(s); "
+        f"{disc['stats']['important_file_count']} important file path(s) recorded."
+    ]
+
+    return AnalyzeResponse(
+        framework=result.framework,
+        source=result.source,
+        ingestion=result.ingestion,
+        dq_rules=result.dq_rules,
+        confidence=result.confidence,
+        llm_inference=result.llm_inference,
+        datahub_lineage=result.datahub_lineage,
+        pipelines=result.pipelines,
+        evidence=ev,
+        source_config=result.source_config,
+        ingestion_config=result.ingestion_config,
+        detailed_inventory=result.detailed_inventory,
+        expert_extraction=result.expert_extraction,
+        nodes=result.nodes,
+        flow=result.flow,
+        storage_config=result.storage_config,
+        dq_config=result.dq_config,
+        validation=result.validation,
     )
 
 from engine.scanner.manager import scanner_manager
@@ -122,14 +216,30 @@ from engine.scanner.manager import scanner_manager
     response_model=AnalyzeResponse,
     summary="Actively scan cloud environments using stored credentials",
 )
-async def scan_cloud() -> AnalyzeResponse:
+async def scan_cloud(
+    request: Request,
+    providers: str | None = None,
+    use_llm: bool = False,
+) -> AnalyzeResponse:
     """
     Trigger live querying against AWS, Azure, Databricks, Snowflake 
     if credentials are mathematically configured in the Settings vault.
     Pipes the output into the PipelineIntelligenceEngine.
+
+    Set ``use_llm=true`` to call the local LLM after detection (slower; can fail on small models).
+    Default is off so scans return quickly with rule-based results.
     """
     try:
-        live_data = scanner_manager.scan_all(settings)
+        azure_token = request.session.get("access_token")
+        azure_token_fabric = request.session.get("access_token_fabric")
+        # Ensure we don't have empty strings in the list
+        provider_list = [p.strip().lower() for p in providers.split(",") if p.strip()] if providers else None
+        live_data = await scanner_manager.scan_all(
+            settings,
+            providers=provider_list,
+            azure_token=azure_token,
+            azure_token_fabric=azure_token_fabric,
+        )
         
         # Build strict topological DAGs first using Service Normalization
         safe_pipelines = []
@@ -142,12 +252,27 @@ async def scan_cloud() -> AnalyzeResponse:
         for raw_map in cloud_dump:
             if not isinstance(raw_map, dict): continue
             source_nodes.extend(raw_map.get("apigateway", []))
+            # Azure Data Sources
+            source_nodes.extend(raw_map.get("storage_accounts", [])) 
+            
             ingest_nodes.extend(raw_map.get("lambda", []))
             ingest_nodes.extend(raw_map.get("glue", []))
             ingest_nodes.extend(raw_map.get("functions", []))
             ingest_nodes.extend(raw_map.get("datafactory", []))
+            
+            # Microsoft Fabric items can be Source, Ingest, or Target
+            for item in raw_map.get("fabric_items", []):
+                i_type = item.get("configuration", {}).get("Type", "").lower()
+                if i_type in ["lakehouse", "warehouse"]:
+                    target_nodes.append(item)
+                elif i_type in ["pipeline", "notebook", "sparkjob"]:
+                    ingest_nodes.append(item)
+                else:
+                    source_nodes.append(item)
+
             target_nodes.extend(raw_map.get("s3", []))
             target_nodes.extend(raw_map.get("storage_accounts", []))
+            target_nodes.extend(raw_map.get("fabric_workspaces", []))
         
         # Pipeline mapping and hardening
         for i_node in ingest_nodes:
@@ -228,12 +353,13 @@ async def scan_cloud() -> AnalyzeResponse:
                 "dq_rules": []
             })
 
-        # Pass the topological DAGs into the LLM context for augmentation
+        # Optional LLM augmentation (off by default — Ollama JSON can be slow or invalid on small models)
+        llm_on = bool(use_llm and settings.llm_enabled)
         result = _engine.analyze(
             metadata={"source": "Live Cloud Scan Execution"},
             config={"safe_pipelines": safe_pipelines},
             raw_json=live_data,
-            use_llm=True 
+            use_llm=llm_on,
         )
 
         result.confidence["framework"] = 0.95
@@ -241,11 +367,12 @@ async def scan_cloud() -> AnalyzeResponse:
         result.confidence["ingestion"] = 0.95
 
         # Format evidence properly to show EXACT services discovered
-        evidence_list = [
-            "Connected to AWS and iterated through global regions.",
-            "Invoked Resource Tagging API and localized SDK extractions.",
-            "Analyzed using Local DeepSeek R1 1.5b."
-        ]
+        evidence_list = []
+        
+        if provider_list:
+             evidence_list.append(f"Targeted Scan: {', '.join(provider_list).upper()}")
+        else:
+             evidence_list.append("Discovery: Scanning all configured cloud environments.")
         
         cloud_dump = live_data.get("raw_cloud_dump", [])
         if cloud_dump and isinstance(cloud_dump[0], dict):
@@ -301,14 +428,16 @@ async def scan_cloud() -> AnalyzeResponse:
 
 
 @app.get("/health", summary="Liveness + DataHub connectivity")
-async def health() -> Dict[str, Any]:
+async def health(request: Request) -> Dict[str, Any]:
     dh_ok = datahub_client.health_check()
+    user = request.session.get("user")
     return {
         "status": "ok",
         "datahub_connected": dh_ok,
         "datahub_url": settings.datahub_gms_url,
         "llm_enabled": settings.llm_enabled,
         "version": settings.app_version,
+        "user": user # Returns user info if logged in
     }
 
 
@@ -326,13 +455,17 @@ async def root(request: Request):
 @app.get("/api/config/keys", summary="Get Configured Providers")
 async def get_keys() -> Dict[str, Any]:
     """Return obfuscated/boolean statuses for configured cloud providers."""
+    # Check if Azure is configured via Service Principal (ignoring placeholders)
+    azure_sp_configured = bool(settings.azure_client_id and settings.azure_client_secret and "YOUR_" not in settings.azure_client_id)
+    
     return {
         "aws": bool(settings.aws_access_key_id),
-        "azure": bool(settings.azure_tenant_id),
+        "azure": azure_sp_configured,
         "snowflake": bool(settings.snowflake_account),
         "databricks": bool(settings.databricks_host),
         "datahub": bool(settings.datahub_token) or bool(settings.datahub_gms_url),
         "anthropic": bool(settings.anthropic_api_key),
+        "azure_client_id_active": bool(settings.azure_client_id and "YOUR_" not in settings.azure_client_id)
     }
 
 

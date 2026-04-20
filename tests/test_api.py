@@ -98,6 +98,64 @@ class TestAnalyzeEndpoint:
         assert "SQL: Row count assertion" in data["dq_rules"]
         assert "SQL: Null check" in data["dq_rules"]
 
+    def test_deep_configs_are_returned(self):
+        body = {
+            "metadata": {"platform": "glue"},
+            "config": {
+                "input": "s3://landing/orders/",
+                "output": "jdbc:redshift://warehouse:5439/analytics",
+                "checks": ["SELECT COUNT(*) > 0 FROM orders"],
+                "job_name": "orders_etl",
+            },
+            "raw_json": {
+                "suite_name": "orders_suite",
+                "expectations": [
+                    {
+                        "expectation_type": "expect_column_values_to_not_be_null",
+                        "kwargs": {"column": "order_id"},
+                    }
+                ],
+            },
+        }
+        data = _post(body)
+        assert data["source_config"]["S3"]["bucket"] == "landing"
+        assert data["ingestion_config"]["AWS Glue Jobs"]["job_name"] == "orders_etl"
+        assert data["storage_config"]["Amazon S3"]["path_count"] == 1
+        assert data["dq_config"]["great_expectations"]["suite_names"] == ["orders_suite"]
+        assert data["dq_config"]["sql_checks"]["count"] == 1
+
+    def test_storage_config_from_cloud_inventory(self):
+        body = {
+            "raw_json": {
+                "raw_cloud_dump": [
+                    {
+                        "storage_accounts": [
+                            {
+                                "id": "azure || processedlake",
+                                "configuration": {
+                                    "Location": "eastus",
+                                    "IsHnsEnabled": True,
+                                },
+                            }
+                        ],
+                        "fabric_items": [
+                            {
+                                "id": "fabric || Customer-Lakehouse",
+                                "configuration": {
+                                    "Type": "Lakehouse",
+                                    "OneLakeFilesPath": "https://onelake.dfs.fabric.microsoft.com/ws/lh/Files",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        data = _post(body)
+        assert data["storage_config"]["Azure Storage"]["account_count"] == 1
+        assert data["storage_config"]["Azure Storage"]["hierarchical_namespace_enabled"] is True
+        assert data["storage_config"]["Microsoft Fabric / OneLake"]["path_count"] == 1
+
     def test_empty_payload_returns_empty_lists(self):
         data = _post({})
         assert data["framework"] == []

@@ -80,6 +80,13 @@ def _get_cloud_discovered_list(payload: AnalysisPayload, service_key: str) -> Li
     return all_items
 
 
+def _collect_cloud_discovered_lists(payload: AnalysisPayload, service_keys: List[str]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for key in service_keys:
+        items.extend(_get_cloud_discovered_list(payload, key))
+    return items
+
+
 def _find_pattern(payload: AnalysisPayload, pattern: str) -> Optional[str]:
     """Return the first regex match found anywhere in the payload text."""
     text = payload.all_text()
@@ -96,6 +103,46 @@ def _find_all_pattern(payload: AnalysisPayload, pattern: str) -> List[str]:
 def _compact(d: Dict[str, Any]) -> Dict[str, Any]:
     """Remove None/empty values from a dict."""
     return {k: v for k, v in d.items() if v not in (None, "", [], {})}
+
+
+def _collect_values(obj: Any, target_key: str, max_depth: int = 10, _depth: int = 0) -> List[Any]:
+    """Collect nested values for a given key from dict/list structures."""
+    if _depth > max_depth:
+        return []
+    results: List[Any] = []
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key.lower() == target_key.lower():
+                results.append(value)
+            results.extend(_collect_values(value, target_key, max_depth=max_depth, _depth=_depth + 1))
+    elif isinstance(obj, list):
+        for item in obj:
+            results.extend(_collect_values(item, target_key, max_depth=max_depth, _depth=_depth + 1))
+    return results
+
+
+def _flatten_strings(values: List[Any]) -> List[str]:
+    flat: List[str] = []
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            flat.append(value.strip())
+        elif isinstance(value, (int, float)):
+            flat.append(str(value))
+        elif isinstance(value, list):
+            flat.extend(_flatten_strings(value))
+    return list(dict.fromkeys(flat))
+
+
+def _normalize_inventory_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized.append({
+            "id": item.get("id"),
+            "configuration": item.get("configuration", {}),
+        })
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +286,30 @@ def _extract_rest_api_config(payload: AnalysisPayload) -> Dict[str, Any]:
     })
 
 
+def _extract_fabric_source_config(payload: AnalysisPayload) -> Dict[str, Any]:
+    items = _normalize_inventory_items(_collect_cloud_discovered_lists(payload, ["fabric_items", "fabric_workspaces"]))
+    workspace_names = []
+    lakehouse_paths = []
+    item_types = []
+    for item in items:
+        item_id = str(item.get("id", ""))
+        cfg = item.get("configuration", {})
+        if item_id:
+            workspace_names.append(item_id.split(" || ")[-1])
+        if cfg.get("OneLakeFilesPath"):
+            lakehouse_paths.append(str(cfg["OneLakeFilesPath"]))
+        if cfg.get("OneLakeTablesPath"):
+            lakehouse_paths.append(str(cfg["OneLakeTablesPath"]))
+        if cfg.get("Type"):
+            item_types.append(str(cfg["Type"]))
+    return _compact({
+        "type": "Microsoft Fabric",
+        "workspace_names": list(dict.fromkeys(workspace_names))[:20] or None,
+        "item_types": list(dict.fromkeys(item_types))[:20] or None,
+        "onelake_paths": list(dict.fromkeys(lakehouse_paths))[:20] or None,
+    })
+
+
 # Map: source display name → extractor function
 _SOURCE_EXTRACTORS: Dict[str, Any] = {
     "S3":                _extract_s3_config,
@@ -255,6 +326,7 @@ _SOURCE_EXTRACTORS: Dict[str, Any] = {
     "JDBC/Oracle":       _extract_jdbc_config,
     "JDBC/Generic":      _extract_jdbc_config,
     "REST API":          _extract_rest_api_config,
+    "Microsoft Fabric":  _extract_fabric_source_config,
 }
 
 
@@ -408,6 +480,42 @@ def _extract_dataflow_config(payload: AnalysisPayload) -> Dict[str, Any]:
     })
 
 
+def _extract_azure_function_config(payload: AnalysisPayload) -> Dict[str, Any]:
+    discovered = _get_cloud_discovered_list(payload, "functions")
+    cfg = discovered[0].get("configuration", {}) if discovered else {}
+    function_name = discovered[0]["id"].split(" || ")[-1] if discovered else None
+    return _compact({
+        "type": "Azure Functions",
+        "function_name": _find(payload, "function_name", "name") or function_name,
+        "location": _find(payload, "location", "region") or cfg.get("Location"),
+        "kind": cfg.get("Kind"),
+        "tags": cfg.get("Tags"),
+    })
+
+
+def _extract_fabric_ingestion_config(payload: AnalysisPayload) -> Dict[str, Any]:
+    items = _normalize_inventory_items(_get_cloud_discovered_list(payload, "fabric_items"))
+    pipelines = []
+    notebooks = []
+    spark_jobs = []
+    for item in items:
+        item_id = str(item.get("id", ""))
+        item_name = item_id.split(" || ")[-1] if item_id else None
+        item_type = str(item.get("configuration", {}).get("Type", ""))
+        if item_type.lower() == "pipeline" and item_name:
+            pipelines.append(item_name)
+        elif item_type.lower() == "notebook" and item_name:
+            notebooks.append(item_name)
+        elif item_type.lower() == "sparkjob" and item_name:
+            spark_jobs.append(item_name)
+    return _compact({
+        "type": "Microsoft Fabric",
+        "pipeline_items": list(dict.fromkeys(pipelines)) or None,
+        "notebook_items": list(dict.fromkeys(notebooks)) or None,
+        "spark_job_items": list(dict.fromkeys(spark_jobs)) or None,
+    })
+
+
 # Map: ingestion display name → extractor function
 _INGESTION_EXTRACTORS: Dict[str, Any] = {
     "AWS Glue Jobs":          _extract_glue_config,
@@ -421,7 +529,171 @@ _INGESTION_EXTRACTORS: Dict[str, Any] = {
     "Kafka Connect":          _extract_kafka_connect_config,
     "AWS Step Functions":     _extract_step_functions_config,
     "GCP Dataflow":           _extract_dataflow_config,
+    "Azure Functions":        _extract_azure_function_config,
+    "Microsoft Fabric":       _extract_fabric_ingestion_config,
 }
+
+
+# ---------------------------------------------------------------------------
+# Storage config extractors
+# ---------------------------------------------------------------------------
+
+def extract_storage_configs(payload: AnalysisPayload) -> Dict[str, Any]:
+    s3_items = _normalize_inventory_items(_get_cloud_discovered_list(payload, "s3"))
+    storage_accounts = _normalize_inventory_items(_get_cloud_discovered_list(payload, "storage_accounts"))
+    s3_paths = _find_all_pattern(payload, r"s3[an]?://[^\s\"'>,]+")
+    gcs_paths = _find_all_pattern(payload, r"gs://[^\s\"'>,]+")
+    snowflake_account = _find(payload, "snowflake_account", "account")
+    bigquery_dataset = _find(payload, "bq_dataset", "dataset", "bigquery_dataset")
+    fabric_items = _normalize_inventory_items(_collect_cloud_discovered_lists(payload, ["fabric_items", "fabric_workspaces"]))
+
+    result: Dict[str, Any] = {}
+
+    if s3_items or s3_paths:
+        result["Amazon S3"] = _compact({
+            "bucket_count": len(s3_items) or len(list(dict.fromkeys(
+                re.match(r"s3[an]?://([^/]+)", path).group(1)
+                for path in s3_paths
+                if re.match(r"s3[an]?://([^/]+)", path)
+            ))),
+            "path_count": len(s3_paths) or len(s3_items),
+            "paths": s3_paths[:25] or None,
+            "buckets": (
+                [item["id"].split(" || ")[-1] for item in s3_items if item.get("id")][:25]
+                or list(dict.fromkeys(
+                    re.match(r"s3[an]?://([^/]+)", path).group(1)
+                    for path in s3_paths
+                    if re.match(r"s3[an]?://([^/]+)", path)
+                ))[:25]
+                or None
+            ),
+            "regions": list(dict.fromkeys(
+                str(item.get("configuration", {}).get("Region"))
+                for item in s3_items
+                if item.get("configuration", {}).get("Region")
+            )) or None,
+            "versioning": list(dict.fromkeys(
+                str(item.get("configuration", {}).get("Versioning"))
+                for item in s3_items
+                if item.get("configuration", {}).get("Versioning")
+            )) or None,
+        })
+
+    if storage_accounts:
+        result["Azure Storage"] = _compact({
+            "account_count": len(storage_accounts),
+            "accounts": [item["id"].split(" || ")[-1] for item in storage_accounts if item.get("id")][:25] or None,
+            "locations": list(dict.fromkeys(
+                str(item.get("configuration", {}).get("Location"))
+                for item in storage_accounts
+                if item.get("configuration", {}).get("Location")
+            )) or None,
+            "hierarchical_namespace_enabled": any(
+                bool(item.get("configuration", {}).get("IsHnsEnabled")) for item in storage_accounts
+            ),
+        })
+
+    if gcs_paths:
+        result["Google Cloud Storage"] = _compact({
+            "path_count": len(gcs_paths),
+            "paths": gcs_paths[:25],
+        })
+
+    if snowflake_account:
+        result["Snowflake"] = _compact({
+            "account": snowflake_account,
+            "warehouse": _find(payload, "warehouse", "snowflake_warehouse"),
+            "database": _find(payload, "snowflake_database", "database"),
+            "schema": _find(payload, "snowflake_schema", "schema"),
+        })
+
+    if bigquery_dataset:
+        result["BigQuery"] = _compact({
+            "project_id": _find(payload, "gcp_project_id", "project_id", "project"),
+            "dataset": bigquery_dataset,
+            "table": _find(payload, "bq_table", "table"),
+            "location": _find(payload, "bq_location", "location"),
+        })
+
+    if fabric_items:
+        onelake_paths = []
+        for item in fabric_items:
+            cfg = item.get("configuration", {})
+            if cfg.get("OneLakeFilesPath"):
+                onelake_paths.append(str(cfg["OneLakeFilesPath"]))
+            if cfg.get("OneLakeTablesPath"):
+                onelake_paths.append(str(cfg["OneLakeTablesPath"]))
+        if onelake_paths:
+            result["Microsoft Fabric / OneLake"] = _compact({
+                "path_count": len(onelake_paths),
+                "paths": list(dict.fromkeys(onelake_paths))[:25],
+            })
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# DQ config extractors
+# ---------------------------------------------------------------------------
+
+def extract_dq_configs(payload: AnalysisPayload, detected_dq_rules: List[str]) -> Dict[str, Any]:
+    raw = payload.raw_json
+    checks = _flatten_strings(
+        _collect_values(payload.config, "checks")
+        + _collect_values(payload.raw_json, "checks")
+        + _collect_values(payload.config, "assertion")
+        + _collect_values(payload.raw_json, "validation_sql")
+        + _collect_values(payload.raw_json, "validation")
+        + _collect_values(payload.config, "freshness_check")
+        + _collect_values(payload.raw_json, "check")
+    )
+    expectations = []
+    for exp in _collect_values(raw, "expectations"):
+        if isinstance(exp, list):
+            for item in exp:
+                if isinstance(item, dict):
+                    expectations.append(item)
+
+    ge_expectation_types = list(dict.fromkeys(
+        str(item.get("expectation_type"))
+        for item in expectations
+        if item.get("expectation_type")
+    ))
+    ge_columns = list(dict.fromkeys(
+        str(item.get("kwargs", {}).get("column"))
+        for item in expectations
+        if isinstance(item.get("kwargs"), dict) and item.get("kwargs", {}).get("column")
+    ))
+    dbt_tests = _flatten_strings(
+        _collect_values(raw, "dbt_test")
+        + _collect_values(payload.config, "dbt_test")
+    )
+    suite_names = _flatten_strings(
+        _collect_values(raw, "suite_name")
+        + _collect_values(payload.config, "suite_name")
+        + _collect_values(payload.config, "checkpoint_name")
+        + _collect_values(raw, "checkpoint_name")
+    )
+    tool_markers = []
+    for marker in ("tool", "monitor", "validator", "class"):
+        tool_markers.extend(_flatten_strings(_collect_values(raw, marker) + _collect_values(payload.config, marker)))
+
+    return _compact({
+        "detected_rules": detected_dq_rules or None,
+        "frameworks": [rule for rule in detected_dq_rules if ":" not in rule] or None,
+        "great_expectations": _compact({
+            "suite_names": suite_names or None,
+            "expectation_types": ge_expectation_types or None,
+            "columns": ge_columns or None,
+            "expectation_count": len(expectations) or None,
+        }) if suite_names or expectations else None,
+        "sql_checks": _compact({
+            "count": len(checks) or None,
+            "checks": checks[:25] or None,
+        }) if checks else None,
+        "dbt_tests": dbt_tests or None,
+        "custom_framework_markers": tool_markers or None,
+    })
 
 
 # ---------------------------------------------------------------------------

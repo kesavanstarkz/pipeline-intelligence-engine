@@ -9,7 +9,7 @@ class GCPScanner(CloudScanner):
         # We look for a proxy credential flag, or fallback
         return getattr(settings, 'gcp_project_id', None) is not None or getattr(settings, 'gcp_mock_enabled', False)
 
-    def scan(self, settings: Any) -> Dict[str, List[str]]:
+    def scan(self, settings: Any, **kwargs) -> Dict[str, List[str]]:
         """
         Since GCP SDKs are not present in requirements, we use REST/Mock fallbacks 
         to prove Cross-Cloud paths.

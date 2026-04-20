@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     azure_client_id: Optional[str] = None
     azure_client_secret: Optional[str] = None
     azure_subscription_id: Optional[str] = None
+    azure_redirect_uri: str = "http://localhost:5000/getAToken"
+    app_secret_key: str = "super-secret-key-change-me" # For SessionMiddleware
 
     gcp_project_id: Optional[str] = None
     gcp_mock_enabled: bool = False
@@ -39,6 +41,9 @@ class Settings(BaseSettings):
     snowflake_account: Optional[str] = None
     snowflake_user: Optional[str] = None
     snowflake_password: Optional[str] = None
+
+    # Local workspace discovery (POST /discover/workspace): semicolon-separated roots; empty = only under cwd
+    pipeline_workspace_roots: Optional[str] = None
 
     def update_keys(self, new_keys: Dict[str, Any]) -> None:
         """

@@ -5,9 +5,8 @@ Optional enrichment layer that sends payload + rule-based results to
 an LLM (Anthropic Claude) for dynamic inference and gap-filling.
 
 Only runs when:
-  - settings.llm_enabled is True, OR
-  - caller passes use_llm=True explicitly
-  - settings.anthropic_api_key is set
+  - settings.llm_enabled is True, and
+  - the /analyze request has use_llm=True (opt-in from UI or API client).
 """
 from __future__ import annotations
 
@@ -83,23 +82,29 @@ def llm_infer(
         ollama_url = f"{settings.ollama_base_url.rstrip('/')}/api/generate"
         logger.info(f"Pinging Local LLM at {ollama_url} using model {settings.llm_model}...")
         
-        response = httpx.post(
-            ollama_url,
-            json={
-                "model": settings.llm_model,
-                "prompt": f"{_SYSTEM_PROMPT}\n\n{user_message}",
-                "stream": False,
-                "options": {
-                    "temperature": 0.1,
-                    "num_ctx": 4096
-                }
+        body: Dict[str, Any] = {
+            "model": settings.llm_model,
+            "prompt": f"{_SYSTEM_PROMPT}\n\n{user_message}",
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 4096,
+                "num_predict": 8192,
             },
-            timeout=600.0 # Increased from 300s to 600s: DeepSeek reasoning takes heavy computation for deep config topologies.
-        )
+        }
+        response = httpx.post(ollama_url, json=body, timeout=600.0)
+        if response.status_code >= 400:
+            # Older Ollama builds may reject ``format``; retry without it.
+            body.pop("format", None)
+            response = httpx.post(ollama_url, json=body, timeout=600.0)
         response.raise_for_status()
         raw_text = response.json().get("response", "").strip()
         logger.info("Local LLM generated response successfully.")
-        return _safe_parse_json(raw_text)
+        parsed = _safe_parse_json(raw_text)
+        if parsed is None:
+            logger.warning("LLM returned text that could not be parsed as JSON; skipping inference overlay.")
+        return parsed
     except Exception as exc:
         logger.warning(f"Local LLM inference failed: {exc}")
         return None
@@ -112,8 +117,14 @@ def _build_user_message(payload: Any, rule_based: Dict[str, List[str]]) -> str:
         "rule_based_results": rule_based
     }
     return (
-        "Here is the pipeline payload and rule-based detection results.\n"
-        "Please validate and enhance the analysis:\n\n"
+        "System: You are an expert Cloud Data Architect. Analyze the provided multi-cloud inventory \n"
+        "and identify data pipelines, ETL flows, and security posture. \n\n"
+        "Key areas to highlight:\n"
+        "- **S3 Connectivity**: Check for Public Access Blocks and Bucket Policies to surface security risks.\n"
+        "- **Azure Fabric Integrated Flows**: Map Lakehouse OneLake paths to downstream ingestion.\n"
+        "- **Service Dependencies**: How API Gateway, Lambda, and Functions orchestrate data.\n\n"
+        "Output a JSON mapping strictly following the AnalyzeResponse model.\n"
+        "Include a detailed 'architectural_narrative' that summarizes the entire landscape.\n\n"
         + json.dumps(context, indent=2, default=str)
     )
 
@@ -125,16 +136,20 @@ def _truncate(obj: Any, max_chars: int = 15000) -> Any:
     return obj
 
 def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
-    # Strip markdown fences if present
-    text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    # Handle DeepSeek thoughts <think>...</think> which might bleed if format:json isn't perfectly respected
+    # 1. Strip DeepSeek thoughts <think>...</think>
     import re
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     
+    # 2. Extract JSON block from markdown fences or just raw text
+    # This regex looks for ```json { ... } ``` or just { ... }
+    json_match = re.search(r"(\{[\s\S]*\})", text)
+    if json_match:
+        text = json_match.group(1)
+    else:
+        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+
     try:
-        # Use strict=False to allow control characters (like unescaped newlines) 
-        # which small models often output in JSON strings.
         return json.loads(text, strict=False)
     except json.JSONDecodeError as exc:
-        logger.warning(f"LLM response is not valid JSON: {exc} | raw={text[:200]}")
-        return {"raw_response": text}
+        logger.warning(f"LLM response is not valid JSON: {exc} | raw={text[:400]}")
+        return None
