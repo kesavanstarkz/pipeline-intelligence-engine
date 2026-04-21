@@ -20,12 +20,19 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from api.models import AnalyzeRequest, AnalyzeResponse, WorkspaceDiscoverRequest
+from api.models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    DataPipelineAnalyzeResponse,
+    WorkspaceDiscoverRequest,
+)
 from config.settings import settings
 from engine.datahub_client import datahub_client
+from engine.data_pipeline_analyzer import analyze_data_pipelines
 from engine.pipeline_engine import PipelineIntelligenceEngine
 from engine.registry import get_all_detectors
 from engine.discovery.local_scanner import resolve_safe_root, scan_local_workspace
+from llm.inference import llm_infer_data_pipeline_reasoning
 from api.auth import router as auth_router
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -116,6 +123,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         llm_inference=result.llm_inference,
         datahub_lineage=result.datahub_lineage,
         pipelines=result.pipelines,
+        data_pipeline_reports=result.data_pipeline_reports,
         evidence=result.evidence,
         source_config=result.source_config,
         ingestion_config=result.ingestion_config,
@@ -127,6 +135,38 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         dq_config=result.dq_config,
         validation=result.validation,
     )
+
+
+@app.post(
+    "/analyze/data-pipelines",
+    response_model=DataPipelineAnalyzeResponse,
+    summary="Extract Fabric and ADF workflow details",
+    response_description="Strict JSON list of detected Fabric / ADF data pipelines",
+)
+async def analyze_data_pipeline_workflows(request: AnalyzeRequest) -> DataPipelineAnalyzeResponse:
+    """
+    Detect Microsoft Fabric and Azure Data Factory workflows and return a strict
+    pipeline-centric JSON payload.
+    """
+    try:
+        payload = analyze_data_pipelines(
+            _engine._build_payload(  # noqa: SLF001 - shared payload builder for API routes
+                metadata=request.metadata,
+                config=request.config,
+                raw_json=request.raw_json,
+            )
+        )
+        if request.use_llm and settings.llm_enabled:
+            for report in payload:
+                report["reasoning"] = llm_infer_data_pipeline_reasoning(report)
+    except Exception as exc:
+        logger.exception("Data pipeline analysis failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Data pipeline analysis failed: {exc}",
+        ) from exc
+
+    return DataPipelineAnalyzeResponse(root=payload)
 
 
 @app.post(
@@ -197,6 +237,7 @@ async def discover_workspace(body: WorkspaceDiscoverRequest) -> AnalyzeResponse:
         llm_inference=result.llm_inference,
         datahub_lineage=result.datahub_lineage,
         pipelines=result.pipelines,
+        data_pipeline_reports=result.data_pipeline_reports,
         evidence=ev,
         source_config=result.source_config,
         ingestion_config=result.ingestion_config,
@@ -265,7 +306,7 @@ async def scan_cloud(
                 i_type = item.get("configuration", {}).get("Type", "").lower()
                 if i_type in ["lakehouse", "warehouse"]:
                     target_nodes.append(item)
-                elif i_type in ["pipeline", "notebook", "sparkjob"]:
+                elif i_type in ["pipeline", "datapipeline", "notebook", "sparkjob"]:
                     ingest_nodes.append(item)
                 else:
                     source_nodes.append(item)
@@ -409,6 +450,7 @@ async def scan_cloud(
             llm_inference=result.llm_inference,
             datahub_lineage=result.datahub_lineage,
             pipelines=safe_pipelines,
+            data_pipeline_reports=result.data_pipeline_reports,
             evidence={"Live Scan Telemetry Extract": evidence_list},
             source_config=result.source_config,
             ingestion_config=result.ingestion_config,

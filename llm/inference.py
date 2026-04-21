@@ -109,6 +109,54 @@ def llm_infer(
         logger.warning(f"Local LLM inference failed: {exc}")
         return None
 
+
+def llm_infer_data_pipeline_reasoning(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Ask the local LLM to explain why values were derived and why some remain missing.
+    Returns a small JSON object or None.
+    """
+    if not settings.llm_enabled:
+        logger.info("Data pipeline reasoning skipped — LLM_ENABLED is false.")
+        return None
+
+    import httpx
+
+    prompt = (
+        "You are a senior data pipeline reviewer. "
+        "Given a structured DataPipeline extraction, produce a compact JSON object with keys "
+        "'summary', 'field_reasoning', and 'confidence'. "
+        "Field reasoning must explain why the extracted values are credible and why any missing fields remain missing. "
+        "Do not invent fields outside the provided report.\n\n"
+        f"{json.dumps(report, indent=2, default=str)}"
+    )
+
+    try:
+        ollama_url = f"{settings.ollama_base_url.rstrip('/')}/api/generate"
+        body: Dict[str, Any] = {
+            "model": settings.llm_model,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 4096,
+                "num_predict": 1024,
+            },
+        }
+        response = httpx.post(ollama_url, json=body, timeout=180.0)
+        if response.status_code >= 400:
+            body.pop("format", None)
+            response = httpx.post(ollama_url, json=body, timeout=180.0)
+        response.raise_for_status()
+        raw_text = response.json().get("response", "").strip()
+        parsed = _safe_parse_json(raw_text)
+        if parsed is None:
+            logger.warning("Local LLM reasoning output could not be parsed as JSON.")
+        return parsed
+    except Exception as exc:
+        logger.warning(f"Local LLM data pipeline reasoning failed: {exc}")
+        return None
+
 def _build_user_message(payload: Any, rule_based: Dict[str, List[str]]) -> str:
     context = {
         "metadata": getattr(payload, "metadata", {}),

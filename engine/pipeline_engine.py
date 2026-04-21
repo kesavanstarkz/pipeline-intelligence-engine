@@ -21,6 +21,7 @@ from engine.config_extractor import (
     extract_source_configs,
     extract_storage_configs,
 )
+from engine.data_pipeline_analyzer import analyze_data_pipelines
 from llm.inference import llm_infer
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class AnalysisResult:
         self.evidence = evidence or {}
         
         self.pipelines = None
+        self.data_pipeline_reports = None
         self.nodes = None
         self.flow = None
         self.source_config = None
@@ -71,6 +73,7 @@ class AnalysisResult:
             "datahub_lineage":  self.datahub_lineage,
             "evidence":         self.evidence,
             "pipelines":        self.pipelines,
+            "data_pipeline_reports": self.data_pipeline_reports,
             "nodes":            self.nodes,
             "flow":             self.flow,
             "source_config":    self.source_config,
@@ -108,7 +111,7 @@ class PipelineIntelligenceEngine:
         use_llm: bool = False,
     ) -> AnalysisResult:
         # 1. Build unified payload
-        payload = AnalysisPayload(
+        payload = self._build_payload(
             metadata=metadata,
             config=config,
             raw_json=raw_json,
@@ -174,6 +177,8 @@ class PipelineIntelligenceEngine:
             evidence=evidence_map,
         )
 
+        res.data_pipeline_reports = analyze_data_pipelines(payload) or None
+
         # Always extract structured configs from the payload (rule-based, no LLM needed)
         res.source_config = extract_source_configs(
             category_results["source"], payload
@@ -226,6 +231,20 @@ class PipelineIntelligenceEngine:
                 res.detailed_inventory = llm_result["detailed_inventory"]
             
         return res
+
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_payload(
+        metadata: Dict[str, Any],
+        config: Dict[str, Any],
+        raw_json: Dict[str, Any],
+    ) -> AnalysisPayload:
+        return AnalysisPayload(
+            metadata=metadata,
+            config=config,
+            raw_json=raw_json,
+        )
 
     # ------------------------------------------------------------------
 

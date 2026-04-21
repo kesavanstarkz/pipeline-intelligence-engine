@@ -502,7 +502,7 @@ def _extract_fabric_ingestion_config(payload: AnalysisPayload) -> Dict[str, Any]
         item_id = str(item.get("id", ""))
         item_name = item_id.split(" || ")[-1] if item_id else None
         item_type = str(item.get("configuration", {}).get("Type", ""))
-        if item_type.lower() == "pipeline" and item_name:
+        if item_type.lower() in {"pipeline", "datapipeline"} and item_name:
             pipelines.append(item_name)
         elif item_type.lower() == "notebook" and item_name:
             notebooks.append(item_name)

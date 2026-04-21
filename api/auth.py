@@ -1,6 +1,8 @@
-import msal
 import logging
+import secrets
 from typing import Optional
+
+import msal
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
@@ -9,6 +11,12 @@ from config.settings import settings
 logger = logging.getLogger("pipeline_ie.auth")
 
 router = APIRouter(tags=["Authentication"])
+GRAPH_AND_FABRIC_SCOPES = [
+    "User.Read",
+    "User.ReadBasic.All",
+    "Directory.Read.All",
+    "https://analysis.windows.net/powerbi/api/.default",
+]
 
 def get_msal_app():
     """Build the MSAL confidential client application."""
@@ -38,13 +46,14 @@ async def login(request: Request):
         
     # Generate the auth URL
     # Scope for Graph API to get user info and also for scanning if desired
-    scopes = ["User.Read", "User.ReadBasic.All", "Directory.Read.All", "https://analysis.windows.net/powerbi/api/.default"] 
+    scopes = GRAPH_AND_FABRIC_SCOPES
+    auth_state = secrets.token_urlsafe(24)
+    request.session["auth_state"] = auth_state
     
     auth_url = app.get_authorization_request_url(
         scopes,
         redirect_uri=settings.azure_redirect_uri,
-        # state is used to prevent CSRF, we store it in session
-        state="some_random_state" # In production, generate a real random state
+        state=auth_state,
     )
     
     return RedirectResponse(auth_url)
@@ -54,6 +63,10 @@ async def get_a_token(request: Request, code: Optional[str] = None, state: Optio
     """Callback from Microsoft to exchange code for token."""
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code missing")
+    expected_state = request.session.pop("auth_state", None)
+    if expected_state and state != expected_state:
+        logger.error("MSAL callback state mismatch: expected=%s actual=%s", expected_state, state)
+        raise HTTPException(status_code=401, detail="Authentication failed: invalid OAuth state")
         
     app = get_msal_app()
     if not app:
@@ -62,7 +75,7 @@ async def get_a_token(request: Request, code: Optional[str] = None, state: Optio
     # Exchange code for tokens
     result = app.acquire_token_by_authorization_code(
         code,
-        scopes = ["User.Read", "User.ReadBasic.All", "Directory.Read.All", "https://analysis.windows.net/powerbi/api/.default"],
+        scopes=GRAPH_AND_FABRIC_SCOPES,
         redirect_uri=settings.azure_redirect_uri
     )
     
@@ -122,13 +135,50 @@ async def browser_login(request: Request):
         request.session["user"] = {
             "name": "Azure Portal User",
             "preferred_username": "Interactive SSO (Fabric scope)",
+            "auth_mode": "interactive_browser",
         }
 
         return RedirectResponse(url="/?success=Logged+in+via+Browser+SSO+Fabric")
 
     except Exception as e:
-        logger.error(f"Browser login failed: {str(e)}")
-        return RedirectResponse(url=f"/?error=Browser+login+failed:+{str(e)}")
+        error_text = str(e)
+        if "state mismatch" in error_text.lower():
+            logger.warning(
+                "Interactive browser auth state mismatch detected; retrying with device code flow"
+            )
+            try:
+                from azure.identity import DeviceCodeCredential
+
+                def _prompt_callback(verification_uri: str, user_code: str, expires_on: object) -> None:
+                    logger.warning(
+                        "Device code login required. Open %s and enter code %s before %s",
+                        verification_uri,
+                        user_code,
+                        expires_on,
+                    )
+
+                device_credential = DeviceCodeCredential(
+                    tenant_id=settings.azure_tenant_id or None,
+                    prompt_callback=_prompt_callback,
+                )
+                t_fabric = await run_in_threadpool(
+                    device_credential.get_token, "https://analysis.windows.net/powerbi/api/.default"
+                )
+                request.session["access_token_fabric"] = t_fabric.token
+                request.session["user"] = {
+                    "name": "Azure Portal User",
+                    "preferred_username": "Device Code (Fabric scope)",
+                    "auth_mode": "device_code",
+                }
+                return RedirectResponse(url="/?success=Logged+in+via+Device+Code+Fabric")
+            except Exception as fallback_error:
+                logger.error("Device code fallback failed: %s", fallback_error)
+                return RedirectResponse(
+                    url=f"/?error=Browser+login+failed:+{fallback_error}"
+                )
+
+        logger.error("Browser login failed: %s", error_text)
+        return RedirectResponse(url=f"/?error=Browser+login+failed:+{error_text}")
 
 @router.get("/logout")
 async def logout(request: Request):

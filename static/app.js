@@ -187,14 +187,25 @@ document.addEventListener('DOMContentLoaded', () => {
             resultsPanel.classList.add('hidden');
 
             try {
-                const response = await fetch('/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!response.ok) throw new Error('Analysis failed');
-                const data = await response.json();
-                renderResults(data);
+                const [analysisResponse, pipelineResponse] = await Promise.all([
+                    fetch('/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    }),
+                    fetch('/analyze/data-pipelines', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })
+                ]);
+
+                if (!analysisResponse.ok) throw new Error('Analysis failed');
+                if (!pipelineResponse.ok) throw new Error('Pipeline analysis failed');
+
+                const analysisData = await analysisResponse.json();
+                const pipelineData = await pipelineResponse.json();
+                renderResults(mergeAnalysisWithPipelineReports(analysisData, pipelineData));
                 showToast('JSON Analysis Complete');
             } catch (error) {
                 showToast(error.message, 'error');
@@ -334,6 +345,158 @@ document.addEventListener('DOMContentLoaded', () => {
         }).join('');
     }
 
+    function renderJsonPanel(title, icon, value, extraClass = '') {
+        return `
+            <div class="bg-black/60 p-4 rounded-xl border border-white/10 ${extraClass}">
+                <h5 class="text-[10px] uppercase font-bold text-white mb-3 flex items-center gap-1.5 opacity-90">
+                    <i data-lucide="${icon}" class="w-3.5 h-3.5 text-vercelBlue"></i>${title}
+                </h5>
+                <pre class="text-[10px] text-gray-300 font-mono tracking-tight leading-relaxed whitespace-pre-wrap break-words"><code>${escapeHtml(JSON.stringify(value ?? {}, null, 2))}</code></pre>
+            </div>
+        `;
+    }
+
+    function renderPipelineReportPanels(report) {
+        const reformatted = report?.reformatted || {};
+        const original = report?.original || {};
+        const reasoning = report?.reasoning || null;
+
+        let html = `
+            <div class="bg-vercelBlue/5 p-4 rounded-xl border border-vercelBlue/20 mt-3">
+                <h5 class="text-[10px] uppercase font-semibold text-vercelBlue mb-3 flex items-center gap-1"><i data-lucide="git-branch" class="w-3 h-3"></i> Pipeline Details</h5>
+                <div class="space-y-2 text-[10px]">
+                    <div class="flex justify-between gap-4"><span class="text-textSecondary uppercase tracking-wider">Pipeline</span><span class="text-white text-right">${escapeHtml(report.pipeline_name || 'unknown')}</span></div>
+                    <div class="flex justify-between gap-4"><span class="text-textSecondary uppercase tracking-wider">Platform</span><span class="text-white text-right">${escapeHtml(report.platform || 'unknown')}</span></div>
+                    <div class="flex justify-between gap-4"><span class="text-textSecondary uppercase tracking-wider">Flow</span><span class="text-white text-right">${escapeHtml(report.flow?.text || 'unknown')}</span></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
+                ${renderJsonPanel('Reformatted', 'wand-2', reformatted)}
+                ${renderJsonPanel('Original', 'file-json', original)}
+            </div>
+        `;
+
+        if (reasoning) {
+            html += renderJsonPanel('Local LLM Reasoning', 'brain', reasoning, 'mt-3');
+        }
+
+        return html;
+    }
+
+    function normalizePipelineReports(pipelineReports) {
+        if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
+            return null;
+        }
+
+        const nodes = [];
+        const edges = [];
+
+        pipelineReports.forEach((report, reportIndex) => {
+            const graph = report?.flow?.graph || {};
+            const reportNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+            const reportEdges = Array.isArray(graph.edges) ? graph.edges : [];
+
+            reportNodes.forEach((node, nodeIndex) => {
+                const localId = String(node.id || `node_${reportIndex}_${nodeIndex}`);
+                const scopedId = `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${localId}`;
+                const nodeType = String(node.type || 'process').toLowerCase();
+                const role = nodeType === 'source'
+                    ? 'source'
+                    : ((nodeType === 'destination' || nodeType === 'sink') ? 'storage' : 'compute');
+
+                let config = report.ingestion_configs || {};
+                if (nodeType === 'source') {
+                    config = report.source_configs || {};
+                } else if (nodeType === 'destination' || nodeType === 'sink') {
+                    config = {
+                        destination: report.ingestion_configs?.destination || 'unknown',
+                        platform: report.platform || 'unknown'
+                    };
+                } else if (nodeType === 'validation') {
+                    config = {
+                        dq_rules: report.dq_rules || []
+                    };
+                }
+
+                nodes.push({
+                    id: scopedId,
+                    title: localId,
+                    subtitle: `${report.platform || 'Pipeline'} Item`,
+                    raw_type: nodeType,
+                    role,
+                    config,
+                    pipelineReport: report,
+                    pipelineNodeType: nodeType
+                });
+            });
+
+            reportEdges.forEach((edge) => {
+                edges.push({
+                    from: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.from}`,
+                    to: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.to}`
+                });
+            });
+        });
+
+        return {
+            nodes,
+            edges,
+            framework: [...new Set(pipelineReports.map(item => item.platform).filter(Boolean))],
+            source: [...new Set(pipelineReports.map(item => item.source_configs?.service_name).filter(Boolean))],
+            ingestion: [...new Set(pipelineReports.map(item => `${item.platform} Pipeline`).filter(Boolean))],
+            dq_rules: [...new Set(pipelineReports.flatMap(item => item.dq_rules || []))],
+            text: pipelineReports.map(item => `${item.pipeline_name}: ${item.flow?.text || 'unknown'}`).join('\n')
+        };
+    }
+
+    function mergeAnalysisWithPipelineReports(analysisData, pipelineReports) {
+        const normalized = normalizePipelineReports(pipelineReports);
+        if (!normalized) return analysisData;
+
+        return {
+            ...analysisData,
+            framework: analysisData.framework?.length ? analysisData.framework : normalized.framework,
+            source: analysisData.source?.length ? analysisData.source : normalized.source,
+            ingestion: analysisData.ingestion?.length ? analysisData.ingestion : normalized.ingestion,
+            dq_rules: analysisData.dq_rules?.length ? analysisData.dq_rules : normalized.dq_rules,
+            nodes: analysisData.nodes?.length ? analysisData.nodes : normalized.nodes,
+            data_pipeline_reports: pipelineReports,
+            pipeline_summary_flow: { text: normalized.text }
+        };
+    }
+
+    function normalizeNodeLookupKey(value) {
+        return String(value || '')
+            .split('||')
+            .pop()
+            .trim()
+            .replace(/[^a-z0-9]+/gi, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    function findPipelineReportForNode(nodeId, pipelineReports) {
+        if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
+            return null;
+        }
+
+        const lookup = normalizeNodeLookupKey(nodeId);
+        for (const report of pipelineReports) {
+            if (normalizeNodeLookupKey(report.pipeline_name) === lookup) {
+                return report;
+            }
+
+            const graphNodes = report?.flow?.graph?.nodes;
+            if (Array.isArray(graphNodes)) {
+                const matched = graphNodes.some(node => normalizeNodeLookupKey(node.id) === lookup);
+                if (matched) {
+                    return report;
+                }
+            }
+        }
+        return null;
+    }
+
     function renderExtractedConfigTabs(data) {
         const panel = document.getElementById('extracted-config-tabs-panel');
         const buttons = document.getElementById('config-tab-buttons');
@@ -386,6 +549,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function renderResults(data) {
+        if (data.data_pipeline_reports && (!data.nodes || data.nodes.length === 0) && (!data.pipelines || data.pipelines.length === 0)) {
+            data = mergeAnalysisWithPipelineReports(data, data.data_pipeline_reports);
+        }
+
         const resultsPanel = document.getElementById('results-panel');
         const resultsContent = document.getElementById('results-content');
         const narrativeSummary = document.getElementById('narrative-summary');
@@ -420,6 +587,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data.evidence && data.evidence['local_discovery'] && Array.isArray(data.evidence['local_discovery'])) {
             evidencePanel.classList.remove('hidden');
             evidencePre.textContent = data.evidence['local_discovery'].join('\n');
+        } else if (data.data_pipeline_reports && data.pipeline_summary_flow?.text) {
+            evidencePanel.classList.remove('hidden');
+            evidencePre.textContent = data.pipeline_summary_flow.text;
+        } else {
+            evidencePanel.classList.add('hidden');
+            evidencePre.textContent = '';
         }
 
         // --- 2. D3 Graph Generation ---
@@ -447,7 +620,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     confidence: Math.floor(85 + Math.random() * 14),
                     warnings: node.warnings,
                     metrics: node.metrics,
-                    config: node.config
+                    config: node.config,
+                    pipelineReport: node.pipelineReport || findPipelineReportForNode(node.id, data.data_pipeline_reports),
+                    pipelineNodeType: node.pipelineNodeType || node.raw_type
                 };
                 
                 const html = `
@@ -481,7 +656,21 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             // Build edges using pipelines if available
-            if (data.pipelines && Array.isArray(data.pipelines)) {
+            if (data.data_pipeline_reports && Array.isArray(data.data_pipeline_reports)) {
+                const reportEdges = data.data_pipeline_reports.flatMap((report, reportIndex) => {
+                    const graph = report?.flow?.graph || {};
+                    const edges = Array.isArray(graph.edges) ? graph.edges : [];
+                    return edges.map(edge => ({
+                        from: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.from}`,
+                        to: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.to}`
+                    }));
+                });
+                reportEdges.forEach(edge => {
+                    if (nodesMap.has(edge.from) && nodesMap.has(edge.to)) {
+                        g.setEdge(edge.from, edge.to, { class: 'active' });
+                    }
+                });
+            } else if (data.pipelines && Array.isArray(data.pipelines)) {
                 data.pipelines.forEach(pipe => {
                     const sNodes = pipe.source || [];
                     const iNodes = pipe.ingestion || [];
@@ -515,6 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const simplified = simplifyName(id, fallback);
                     const resType = Object.keys(resourceMap).find(k => id.toLowerCase().includes(k)) || fallback;
                     const styleConfig = resourceMap[resType];
+                    const pipelineReport = findPipelineReportForNode(id, data.data_pipeline_reports);
 
                     const nodeData = {
                         id,
@@ -525,7 +715,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         type: simplified.category,
                         confidence: simplified.confidence,
                         config: nodeConfig,
-                        code_evidence: nodeCodeEvidence
+                        code_evidence: nodeCodeEvidence,
+                        pipelineReport,
+                        pipelineNodeType: pipelineReport ? 'pipeline' : null
                     };
                     
                     const html = `
@@ -620,6 +812,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Build Deep Config HTML
             let configHtml = '';
+            const report = node.pipelineReport;
+
+            if (report) {
+                configHtml += renderPipelineReportPanels(report);
+            }
             
             if (node.config && Object.keys(node.config).length > 0) {
                 const renderValue = (k, v) => {
@@ -720,7 +917,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     <div class="bg-black/40 p-4 rounded-xl border border-border mt-4">
                         <h5 class="text-[10px] uppercase font-semibold text-textSecondary mb-2">AI Architecture Synthesis</h5>
-                        <p class="text-xs text-textSecondary leading-relaxed italic border-l-2 border-vercelBlue pl-2">"Engineered for high-throughput pipeline ingestion. This node operates as a ${node.type.toLowerCase()} layer handling ${node.subtitle} processes. Auto-inferred rules suggest event-driven triggers."</p>
+                        <p class="text-xs text-textSecondary leading-relaxed italic border-l-2 border-vercelBlue pl-2">"Engineered for high-throughput pipeline ingestion. This node operates as a ${node.type.toLowerCase()} layer handling ${node.subtitle} processes.${report?.flow?.text ? ` Flow: ${report.flow.text}.` : ''}"</p>
                     </div>
                 </div>
             `;
@@ -815,6 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             filtered.forEach((item, idx) => {
                 const simplified = simplifyName(item.id, item.service.toLowerCase());
+                const pipelineReport = findPipelineReportForNode(item.id, data.data_pipeline_reports);
                 const card = document.createElement('div');
                 card.className = "group relative bg-surface border border-border rounded-2xl overflow-hidden transition-all hover:border-vercelBlue/40 hover:shadow-2xl hover:shadow-vercelBlue/5";
                 
@@ -824,6 +1022,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         <span class="text-xs font-mono text-white/90 break-all ml-8 text-right bg-white/0 group-hover/row:bg-white/5 px-1 rounded transition-colors">${typeof v === 'object' ? JSON.stringify(v) : v}</span>
                     </div>
                 `).join('');
+
+                let pipelineRows = '';
+                if (pipelineReport) {
+                    pipelineRows = `<div class="mt-6">${renderPipelineReportPanels(pipelineReport)}</div>`;
+                }
 
                 card.innerHTML = `
                     <div class="p-5 border-b border-border bg-black/20 flex items-center justify-between">
@@ -844,6 +1047,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="space-y-0.5">
                             ${configRows || '<div class="text-[10px] text-textSecondary italic">No detailed properties available.</div>'}
                         </div>
+                        ${pipelineRows}
                     </div>
                     <div class="px-5 py-3 bg-white/[0.02] border-t border-border flex items-center justify-between">
                         <span class="text-[9px] font-mono text-textSecondary uppercase tracking-tighter">Resource ID: ${item.id}</span>
