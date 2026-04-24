@@ -190,12 +190,10 @@ def test_analyze_data_pipelines_ignores_email_notification_as_destination():
     assert data[0]["reformatted"]["ingestion_configs"]["destination"] == "sales_fact"
     assert data[0]["reformatted"]["flow"]["graph"]["nodes"] == [
         {"id": "load_sales", "type": "ingestion"},
-        {"id": "send_alert", "type": "notification"},
     ]
-    assert data[0]["reformatted"]["flow"]["graph"]["edges"] == [
-        {"from": "load_sales", "to": "send_alert"},
-    ]
+    assert data[0]["reformatted"]["flow"]["graph"]["edges"] == []
     assert "Send Alert" not in str(data[0]["reformatted"]["ingestion_configs"]["destination"])
+    assert "Send Alert" not in data[0]["reformatted"]["flow"]["text"]
 
 
 def test_analyze_data_pipelines_empty_payload():

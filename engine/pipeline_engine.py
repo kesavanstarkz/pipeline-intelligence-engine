@@ -9,8 +9,12 @@ Ties together:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
+import httpx
+
+from config.settings import settings
 from engine.datahub_client import DataHubClient, datahub_client as _default_client
 from engine.detectors.base import AnalysisPayload, DetectionResult
 from engine.registry import get_all_detectors
@@ -25,6 +29,106 @@ from engine.data_pipeline_analyzer import analyze_data_pipelines
 from llm.inference import llm_infer
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_detailed_inventory(items: Any) -> Optional[List[Dict[str, Any]]]:
+    if not isinstance(items, list):
+        return None
+
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            normalized.append(item)
+        elif isinstance(item, str) and item.strip():
+            normalized.append(
+                {
+                    "id": item.strip(),
+                    "service": "UNKNOWN",
+                    "config": {},
+                }
+            )
+    return normalized or None
+
+
+def _build_de_config_bridge_payload(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalize a DataPipeline report into the DE Config Tool bridge payload."""
+    if report.get("type") != "DataPipeline":
+        return None
+
+    reformatted = report.get("reformatted")
+    if not isinstance(reformatted, dict) or not reformatted:
+        return None
+
+    flow = reformatted.get("flow")
+    if isinstance(flow, dict):
+        flow_value = flow.get("text")
+    else:
+        flow_value = flow
+
+    return {
+        "pipeline_name": report.get("pipeline_name")
+        or report.get("name")
+        or reformatted.get("pipeline_name")
+        or "unknown",
+        "platform": report.get("platform") or reformatted.get("platform"),
+        "flow": flow_value,
+        "source_config": reformatted.get("source_configs") or reformatted.get("source_config"),
+        "ingestion_config": reformatted.get("ingestion_configs") or reformatted.get("ingestion_config"),
+        "dq_rules": reformatted.get("dq_rules", []),
+        "missing_fields_analysis": reformatted.get("missing_fields_analysis", []),
+        "raw_pipeline_json": report.get("original") or report.get("raw") or report.get("definition"),
+    }
+
+
+def _push_to_de_config_tool(pipeline_report: Dict[str, Any]) -> None:
+    """
+    Push a single DataPipeline report to the DE Config Management Tool.
+    Non-fatal by design; failures are logged and ignored.
+    """
+    target_url = settings.de_config_tool_url
+    if not target_url:
+        return
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(
+                f"{target_url.rstrip('/')}/api/ingest/pipeline",
+                json=pipeline_report,
+            )
+            response.raise_for_status()
+            logger.info(
+                "Pushed pipeline '%s' to DE Config Tool -> status %s",
+                pipeline_report.get("pipeline_name"),
+                response.status_code,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not push to DE Config Tool (non-fatal): %s", exc)
+
+
+def _dispatch_pipeline_reports_to_de_config_tool(
+    pipeline_reports: Optional[List[Dict[str, Any]]],
+) -> None:
+    """Ship discovered DataPipeline reports on a background thread."""
+    if not settings.de_config_tool_url or not pipeline_reports:
+        return
+
+    payloads = [
+        payload
+        for payload in (_build_de_config_bridge_payload(report) for report in pipeline_reports)
+        if payload
+    ]
+    if not payloads:
+        return
+
+    def _worker() -> None:
+        for payload in payloads:
+            _push_to_de_config_tool(payload)
+
+    threading.Thread(
+        target=_worker,
+        name="de-config-bridge",
+        daemon=True,
+    ).start()
 
 
 class AnalysisResult:
@@ -178,6 +282,7 @@ class PipelineIntelligenceEngine:
         )
 
         res.data_pipeline_reports = analyze_data_pipelines(payload) or None
+        _dispatch_pipeline_reports_to_de_config_tool(res.data_pipeline_reports)
 
         # Always extract structured configs from the payload (rule-based, no LLM needed)
         res.source_config = extract_source_configs(
@@ -204,7 +309,7 @@ class PipelineIntelligenceEngine:
                             "service": str(service).upper(),
                             "config": res_meta.get("configuration", {})
                         })
-            res.detailed_inventory = inventory if inventory else None
+            res.detailed_inventory = _normalize_detailed_inventory(inventory)
 
         if llm_result:
             if "pipelines" in llm_result and isinstance(llm_result["pipelines"], list):
@@ -228,7 +333,7 @@ class PipelineIntelligenceEngine:
             if "expert_extraction" in llm_result and isinstance(llm_result["expert_extraction"], dict):
                 res.expert_extraction = llm_result["expert_extraction"]
             if "detailed_inventory" in llm_result and isinstance(llm_result["detailed_inventory"], list):
-                res.detailed_inventory = llm_result["detailed_inventory"]
+                res.detailed_inventory = _normalize_detailed_inventory(llm_result["detailed_inventory"])
             
         return res
 

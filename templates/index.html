@@ -5,14 +5,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pipeline Intelligence Dashboard</title>
-    <link href="https://fonts.googleapis.css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
             theme: {
                 extend: {
-                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    fontFamily: {
+                        sans: ['Space Grotesk', 'sans-serif'],
+                        mono: ['IBM Plex Mono', 'monospace']
+                    },
                     colors: {
                         black: '#0A0A0A',
                         surface: '#111111',
@@ -21,6 +24,8 @@
                         textSecondary: '#A1A1AA',
                         vercelBlue: '#0070F3',
                         vercelPurple: '#7928CA',
+                        accentTeal: '#14B8A6',
+                        accentAmber: '#F59E0B',
                     }
                 }
             }
@@ -50,12 +55,15 @@
             <h1 class="font-semibold text-[15px] tracking-tight">Intelligence Engine</h1>
         </div>
         <div class="flex-1 overflow-y-auto px-4 py-6 space-y-1">
-            <button
+            <button id="nav-analysis"
                 class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md bg-white/10 text-white transition-all"><i
                     data-lucide="git-branch" class="w-4 h-4"></i> Analysis</button>
             <button
                 class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md hover:bg-white/5 text-textSecondary hover:text-white transition-all"><i
                     data-lucide="key" class="w-4 h-4"></i> Credentials</button>
+            <button id="nav-config-agent"
+                class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md hover:bg-white/5 text-textSecondary hover:text-white transition-all"><i
+                    data-lucide="files" class="w-4 h-4"></i> Config Agent</button>
             <button id="nav-settings"
                 class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md hover:bg-white/5 text-textSecondary hover:text-white transition-all"><i
                     data-lucide="settings" class="w-4 h-4"></i> Settings</button>
@@ -100,11 +108,32 @@
             <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
             <div class="max-w-5xl mx-auto space-y-10">
-                <div>
-                    <h2 class="text-3xl font-semibold tracking-tight mb-2">Pipeline Environment</h2>
-                    <p class="text-textSecondary text-[15px]">Detect and visualize telemetry flows dynamically using AI.
-                    </p>
-                </div>
+                <section class="relative overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(0,112,243,0.22),transparent_32%),radial-gradient(circle_at_top_right,rgba(20,184,166,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] px-6 py-8 lg:px-8">
+                    <div class="absolute inset-0 opacity-20 pointer-events-none hero-grid"></div>
+                    <div class="relative z-10 grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-8 items-start">
+                        <div>
+                            <div class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-textSecondary">Multi-cloud Pipeline Intelligence</div>
+                            <h2 class="mt-4 text-4xl lg:text-5xl font-semibold tracking-tight text-white">Upload configs, inspect live scans, and extract `DataPipeline` structure without hand-mapping.</h2>
+                            <p class="mt-4 max-w-2xl text-[15px] leading-7 text-textSecondary">Manual JSON intake now supports Azure, Fabric, AWS, and GCP configs directly. Upload an existing config, target the right analysis section, and review structured pipeline output in dedicated cards below the graph.</p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Manual Import</div>
+                                <div class="mt-2 text-2xl font-semibold text-white">Metadata / Config / Raw</div>
+                                <div class="mt-1 text-xs text-textSecondary">Choose target explicitly or auto-route.</div>
+                            </div>
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Local Model</div>
+                                <div class="mt-2 text-2xl font-semibold text-white">{{ settings.llm_model }}</div>
+                                <div class="mt-1 text-xs text-textSecondary">Ollama-backed optional reasoning.</div>
+                            </div>
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4 col-span-2">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Best Use</div>
+                                <div class="mt-2 text-sm text-white leading-6">Paste pipeline definitions, upload exported Azure/Fabric JSON, or scan cloud assets and review each detected `DataPipeline` as its own section.</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
 
                 <!-- Toggle Switch -->
                 <div class="flex justify-center">
@@ -127,6 +156,7 @@
                     </div>
                 </div>
 
+                <div id="analysis-shell" class="space-y-6">
                 <!-- Auto Discovery Zone -->
                 <div id="auto-zone" class="space-y-6">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -198,6 +228,7 @@
                                 <input type="checkbox" id="scan-use-llm" class="rounded border-border bg-surface">
                                 Use local LLM after scan (slower; optional)
                             </label>
+                            <div class="text-[11px] text-textSecondary font-mono mb-4">Local model: {{ settings.llm_model }}</div>
 
                             <button id="live-scan-btn"
                                 class="relative group px-6 py-2.5 bg-white text-black font-medium text-sm rounded-full overflow-hidden transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.2)]">
@@ -218,29 +249,163 @@
                 </div>
 
                 <!-- Manual Zone (hidden initially) -->
-                <div id="manual-zone" class="hidden space-y-6">
+                <div id="manual-zone" class="hidden">
                     <form id="analyze-form" class="space-y-6">
-                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
-                            <div
-                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
-                                metadata.json</div>
-                            <textarea id="metadata" class="w-full bg-transparent p-4 text-sm font-mono text-white"
-                                placeholder='{}'></textarea>
-                        </div>
-                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
-                            <div
-                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
-                                config.json</div>
-                            <textarea id="config" class="w-full bg-transparent p-4 text-sm font-mono text-white"
-                                placeholder='{}'></textarea>
-                        </div>
-                        <div class="rounded-2xl border border-border bg-surface overflow-hidden">
-                            <div
-                                class="bg-black/40 px-4 py-2 border-b border-border flex text-xs font-mono text-textSecondary">
-                                raw.json</div>
-                            <textarea id="raw_json" class="w-full bg-transparent p-4 text-sm font-mono text-white"
-                                placeholder='{}'></textarea>
-                        </div>
+                        <section class="editor-shell rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-5 lg:p-6 space-y-5">
+                            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                                <div>
+                                    <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em]">Manual Analysis Workspace</div>
+                                    <h3 class="mt-2 text-2xl font-semibold text-white">Upload metadata, config, and raw files independently</h3>
+                                    <p class="mt-1 text-sm text-textSecondary max-w-2xl">Each JSON block now has its own upload path. Use the intake well for shared paste/import flows, then expand only the editors you need while comparing results in the split pane.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" id="beautify-json-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white hover:bg-white/10">Beautify All</button>
+                                    <button type="button" id="clear-all-json-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-black/30 text-sm text-textSecondary hover:text-white">Clear All</button>
+                                </div>
+                            </div>
+
+                            <div id="config-dropzone" class="relative overflow-hidden rounded-[22px] border border-dashed border-vercelBlue/40 bg-[linear-gradient(135deg,rgba(0,112,243,0.12),rgba(20,184,166,0.08))] p-5 transition-all">
+                                <div class="absolute inset-0 opacity-20 pointer-events-none hero-grid"></div>
+                                <div class="relative z-10 grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-5 items-start">
+                                    <div>
+                                        <div class="flex items-center gap-3">
+                                            <div class="w-11 h-11 rounded-2xl bg-white/10 border border-white/10 flex items-center justify-center text-vercelBlue">
+                                                <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+                                            </div>
+                                            <div>
+                                                <div class="text-white font-semibold">Drop JSON here or upload a file</div>
+                                                <div class="text-xs text-textSecondary">Supports exported pipeline definitions and cloud config snapshots.</div>
+                                            </div>
+                                        </div>
+                                        <textarea id="cloud-json-paste" class="mt-4 w-full min-h-[220px] bg-black/40 border border-white/10 rounded-2xl p-4 text-sm font-mono text-white manual-json-area"
+                                            placeholder='Paste Azure / Fabric / AWS / GCP pipeline JSON here'></textarea>
+                                    </div>
+                                    <div class="space-y-4">
+                                        <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
+                                            <div class="text-[11px] font-mono uppercase tracking-[0.18em] text-textSecondary mb-3">Upload Controls</div>
+                                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                <label class="upload-tile">
+                                                    <input type="file" id="metadata-upload" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="metadata" />
+                                                    <span class="upload-tile-label">Metadata</span>
+                                                    <span class="upload-tile-copy">Upload `metadata.json`</span>
+                                                </label>
+                                                <label class="upload-tile">
+                                                    <input type="file" id="config-upload" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="config" />
+                                                    <span class="upload-tile-label">Config</span>
+                                                    <span class="upload-tile-copy">Upload `config.json`</span>
+                                                </label>
+                                                <label class="upload-tile">
+                                                    <input type="file" id="raw-upload" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="raw_json" />
+                                                    <span class="upload-tile-label">Raw</span>
+                                                    <span class="upload-tile-copy">Upload `raw.json`</span>
+                                                </label>
+                                            </div>
+                                            <div class="mt-4">
+                                                <input type="file" id="cloud-json-upload" accept=".json,application/json"
+                                                    class="block w-full text-xs text-textSecondary file:mr-4 file:rounded-xl file:border-0 file:bg-vercelBlue/20 file:px-4 file:py-2.5 file:text-vercelBlue file:font-medium hover:file:bg-vercelBlue/30" />
+                                            </div>
+                                            <div class="mt-4">
+                                                <label for="import-target" class="block text-[11px] font-mono uppercase tracking-[0.18em] text-textSecondary mb-2">Import Target</label>
+                                                <select id="import-target" class="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white">
+                                                    <option value="auto">Auto Detect</option>
+                                                    <option value="metadata">metadata.json</option>
+                                                    <option value="config">config.json</option>
+                                                    <option value="raw_json">raw.json</option>
+                                                </select>
+                                            </div>
+                                            <div class="mt-4 grid grid-cols-2 gap-2">
+                                                <button type="button" id="import-cloud-json-btn"
+                                                    class="px-4 py-2.5 rounded-xl bg-vercelBlue text-white text-sm font-medium hover:bg-vercelBlue/90">
+                                                    Apply Import
+                                                </button>
+                                                <button type="button" id="clear-cloud-json-btn"
+                                                    class="px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-textSecondary text-sm font-medium hover:text-white">
+                                                    Clear Intake
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
+                                            <div class="text-[11px] font-mono uppercase tracking-[0.18em] text-textSecondary mb-3">Quick Route</div>
+                                            <div class="grid grid-cols-1 gap-2">
+                                                <button type="button" data-import-target="metadata" class="quick-import-btn px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-left text-sm text-white hover:bg-white/10">Send to metadata.json</button>
+                                                <button type="button" data-import-target="config" class="quick-import-btn px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-left text-sm text-white hover:bg-white/10">Send to config.json</button>
+                                                <button type="button" data-import-target="raw_json" class="quick-import-btn px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-left text-sm text-white hover:bg-white/10">Send to raw.json</button>
+                                            </div>
+                                            <div class="mt-4 text-[11px] text-textSecondary">Auto-detect prefers `raw.json` for pipeline definitions, `config.json` for source/destination settings, and `metadata.json` for compact labels and platform hints.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="space-y-4">
+                            <div class="flex items-center justify-between gap-4 flex-wrap">
+                                <div>
+                                    <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em]">JSON Editors</div>
+                                    <p class="mt-1 text-sm text-textSecondary">Collapse sections you are not using. Upload buttons are mirrored here so each file can be updated directly.</p>
+                                </div>
+                            </div>
+                            <div class="space-y-4">
+                                <details class="editor-card group" open>
+                                    <summary class="editor-summary">
+                                        <div>
+                                            <div class="editor-title">metadata.json</div>
+                                            <div class="editor-subtitle">Platform hints, names, and light descriptors</div>
+                                        </div>
+                                        <div class="editor-actions">
+                                            <label class="editor-upload-btn" data-editor-action="true">
+                                                <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="metadata" />
+                                                Upload
+                                            </label>
+                                            <button type="button" class="field-beautify-btn" data-target-field="metadata" data-editor-action="true">Beautify</button>
+                                        </div>
+                                    </summary>
+                                    <div class="editor-body">
+                                        <textarea id="metadata" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area"
+                                            placeholder='{}'></textarea>
+                                    </div>
+                                </details>
+                                <details class="editor-card group" open>
+                                    <summary class="editor-summary">
+                                        <div>
+                                            <div class="editor-title">config.json</div>
+                                            <div class="editor-subtitle">Source, destination, schedule, and connection settings</div>
+                                        </div>
+                                        <div class="editor-actions">
+                                            <label class="editor-upload-btn" data-editor-action="true">
+                                                <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="config" />
+                                                Upload
+                                            </label>
+                                            <button type="button" class="field-beautify-btn" data-target-field="config" data-editor-action="true">Beautify</button>
+                                        </div>
+                                    </summary>
+                                    <div class="editor-body">
+                                        <textarea id="config" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area"
+                                            placeholder='{}'></textarea>
+                                    </div>
+                                </details>
+                                <details class="editor-card group" open>
+                                    <summary class="editor-summary">
+                                        <div>
+                                            <div class="editor-title">raw.json</div>
+                                            <div class="editor-subtitle">Full pipeline definition, cloud dump, or exported raw payload</div>
+                                        </div>
+                                        <div class="editor-actions">
+                                            <label class="editor-upload-btn" data-editor-action="true">
+                                                <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="raw_json" />
+                                                Upload
+                                            </label>
+                                            <button type="button" class="field-beautify-btn" data-target-field="raw_json" data-editor-action="true">Beautify</button>
+                                        </div>
+                                    </summary>
+                                    <div class="editor-body">
+                                        <textarea id="raw_json" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area"
+                                            placeholder='{}'></textarea>
+                                    </div>
+                                </details>
+                            </div>
+                        </section>
+
                         <div class="rounded-2xl border border-border bg-surface overflow-hidden p-4 space-y-3">
                             <div class="text-xs font-mono text-textSecondary uppercase">Local repo / pipeline folder (server path)</div>
                             <p class="text-xs text-textSecondary">Runs on the machine hosting the API. Paths must be under the process working directory or <span class="font-mono">PIPELINE_WORKSPACE_ROOTS</span>.</p>
@@ -249,7 +414,7 @@
                                     class="flex-1 bg-black/40 border border-border rounded-lg px-3 py-2 text-sm font-mono text-white"
                                 />
                                 <label class="flex items-center gap-2 text-sm text-textSecondary shrink-0">
-                                    <input type="checkbox" id="workspace-use-llm" class="rounded border-border bg-surface"> Use AI
+                                <input type="checkbox" id="workspace-use-llm" class="rounded border-border bg-surface"> Use AI
                                 </label>
                                 <button type="button" id="workspace-discover-btn"
                                     class="px-4 py-2 rounded-lg bg-vercelBlue/20 border border-vercelBlue/40 text-vercelBlue text-sm font-medium hover:bg-vercelBlue/30">
@@ -257,9 +422,9 @@
                                 </button>
                             </div>
                         </div>
-                        <div class="flex justify-between items-center">
+                        <div class="flex justify-between items-center gap-3 flex-wrap">
                             <label class="flex items-center gap-2 cursor-pointer text-sm font-medium"><input
-                                    type="checkbox" id="use_llm" class="rounded border-border bg-surface"> Use AI
+                                    type="checkbox" id="use_llm" class="rounded border-border bg-surface"> Use Local LLM
                                 Inference</label>
                             <button type="submit"
                                 class="relative group px-5 py-2.5 bg-white text-black text-sm rounded-full font-medium shadow-lg hover:scale-105 active:scale-95 transition-all min-w-[120px]">
@@ -273,12 +438,142 @@
                             </button>
                         </div>
                     </form>
+
+                    <section id="config-agent-section" class="mt-8 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-5 lg:p-6 space-y-5">
+                        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                            <div>
+                                <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em]">Config Agent</div>
+                                <h3 class="mt-2 text-2xl font-semibold text-white">Merge pipeline config with your reference config</h3>
+                                <p class="mt-1 text-sm text-textSecondary max-w-2xl">Upload an example config, pull the extracted config from the latest pipeline result, and generate a final merged config you can copy directly.</p>
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <button type="button" id="agent-use-latest-extracted-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white hover:bg-white/10">Use Latest Extracted</button>
+                                <button type="button" id="agent-use-latest-raw-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white hover:bg-white/10">Use Latest Raw</button>
+                                <button type="button" id="agent-copy-merged-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-black/30 text-sm text-textSecondary hover:text-white">Copy Merged Config</button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                            <div class="rounded-[24px] border border-border bg-surface overflow-hidden">
+                                <div class="bg-black/40 px-4 py-3 border-b border-border flex items-center justify-between gap-3 text-xs font-mono text-textSecondary">
+                                    <div class="flex items-center gap-2">
+                                        <span>Pipeline Extracted Config</span>
+                                        <span id="agent-extracted-config-status" class="json-status-badge json-status-idle">Empty</span>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <label class="editor-upload-btn" data-editor-action="true">
+                                            <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="agent-extracted-config" />
+                                            Upload
+                                        </label>
+                                        <button type="button" class="field-beautify-btn" data-target-field="agent-extracted-config" data-editor-action="true">Beautify</button>
+                                    </div>
+                                </div>
+                                <textarea id="agent-extracted-config" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area" placeholder='{"source_configs": {}, "ingestion_configs": {}, "dq_rules": [], "flow": {}}'></textarea>
+                            </div>
+                            <div class="rounded-[24px] border border-border bg-surface overflow-hidden">
+                                <div class="bg-black/40 px-4 py-3 border-b border-border flex items-center justify-between gap-3 text-xs font-mono text-textSecondary">
+                                    <div class="flex items-center gap-2">
+                                        <span>Your Local Reference Config</span>
+                                        <span id="agent-example-config-status" class="json-status-badge json-status-idle">Empty</span>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <label class="editor-upload-btn" data-editor-action="true">
+                                            <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="agent-example-config" />
+                                            Upload
+                                        </label>
+                                        <button type="button" class="field-beautify-btn" data-target-field="agent-example-config" data-editor-action="true">Beautify</button>
+                                    </div>
+                                </div>
+                                <textarea id="agent-example-config" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area" placeholder='{"source_configs": {}, "ingestion_configs": {}, "dq_rules": []}'></textarea>
+                            </div>
+                            <div class="rounded-[24px] border border-border bg-surface overflow-hidden">
+                                <div class="bg-black/40 px-4 py-3 border-b border-border flex items-center justify-between gap-3 text-xs font-mono text-textSecondary">
+                                    <div class="flex items-center gap-2">
+                                        <span>Pipeline Raw JSON</span>
+                                        <span id="agent-raw-pipeline-status" class="json-status-badge json-status-idle">Empty</span>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <label class="editor-upload-btn" data-editor-action="true">
+                                            <input type="file" accept=".json,application/json" class="sr-only json-direct-upload" data-target-field="agent-raw-pipeline" />
+                                            Upload
+                                        </label>
+                                        <button type="button" class="field-beautify-btn" data-target-field="agent-raw-pipeline" data-editor-action="true">Beautify</button>
+                                    </div>
+                                </div>
+                                <textarea id="agent-raw-pipeline" class="w-full bg-transparent p-4 text-sm font-mono text-white manual-json-area" placeholder='{"type": "adf_pipeline", "activities": []}'></textarea>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <input type="text" id="agent-platform" placeholder="Platform hint: adf / fabric / glue"
+                                class="bg-black/40 border border-border rounded-lg px-3 py-2 text-sm text-white" />
+                            <input type="text" id="agent-ingestion-type" placeholder="Ingestion type: batch / streaming"
+                                class="bg-black/40 border border-border rounded-lg px-3 py-2 text-sm text-white" />
+                            <input type="text" id="agent-dq-preference" placeholder="DQ preference: strict / standard"
+                                class="bg-black/40 border border-border rounded-lg px-3 py-2 text-sm text-white" />
+                            <label class="flex items-center gap-2 text-sm text-textSecondary border border-border rounded-lg px-3 py-2 bg-black/30">
+                                <input type="checkbox" id="agent-use-llm" class="rounded border-border bg-surface">
+                                Use Local LLM Compare
+                            </label>
+                        </div>
+
+                        <div class="flex items-center justify-between gap-3 flex-wrap">
+                            <p class="text-xs text-textSecondary">The agent uses raw pipeline JSON as ground truth, then enriches missing fields from the example config.</p>
+                            <button type="button" id="generate-merged-config-btn"
+                                class="relative group px-5 py-2.5 bg-white text-black text-sm rounded-full font-medium shadow-lg hover:scale-105 active:scale-95 transition-all min-w-[180px]">
+                                <span class="btn-text">Generate Merged Config</span>
+                                <div class="hidden absolute inset-0 bg-white/80 z-20 flex items-center justify-center spinner-container">
+                                    <div class="w-4 h-4 border-2 border-black border-r-transparent rounded-full animate-spin"></div>
+                                </div>
+                            </button>
+                        </div>
+
+                        <div id="config-agent-output" class="hidden rounded-[24px] border border-white/10 bg-black/30 p-5 space-y-5">
+                            <div class="flex items-center justify-between gap-3 flex-wrap">
+                                <div>
+                                    <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em]">Merged Output</div>
+                                    <p id="config-agent-accuracy" class="mt-1 text-sm text-white">Accuracy score: --</p>
+                                </div>
+                                <button type="button" id="agent-copy-final-config-btn" class="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-white hover:bg-white/10">Copy Final Config</button>
+                            </div>
+                            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                                <div class="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
+                                    <div class="bg-black/40 px-4 py-3 border-b border-white/10 text-xs font-mono text-textSecondary">final_config.json</div>
+                                    <pre id="config-agent-final-config" class="p-4 text-xs text-white font-mono overflow-auto custom-scrollbar max-h-[420px]"></pre>
+                                </div>
+                                <div class="space-y-4">
+                                    <div class="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
+                                        <div class="bg-black/40 px-4 py-3 border-b border-white/10 text-xs font-mono text-textSecondary">merge_report.json</div>
+                                        <pre id="config-agent-merge-report" class="p-4 text-xs text-white font-mono overflow-auto custom-scrollbar max-h-[180px]"></pre>
+                                    </div>
+                                    <div class="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
+                                        <div class="bg-black/40 px-4 py-3 border-b border-white/10 text-xs font-mono text-textSecondary">validation_report.json</div>
+                                        <pre id="config-agent-validation-report" class="p-4 text-xs text-white font-mono overflow-auto custom-scrollbar max-h-[180px]"></pre>
+                                    </div>
+                                    <div class="rounded-2xl border border-white/10 bg-black/40 p-4">
+                                        <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em] mb-3">Architect Notes</div>
+                                        <div id="config-agent-notes" class="space-y-2 text-sm text-textSecondary"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
+                                <div class="bg-black/40 px-4 py-3 border-b border-white/10 text-xs font-mono text-textSecondary">Config Diff View</div>
+                                <div id="config-agent-diff-grid" class="grid grid-cols-1 xl:grid-cols-3 gap-px bg-white/5"></div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- Results -->
-                <div id="results-panel" class="hidden mt-12 pt-8 border-t border-border pb-20">
-                    <h3 class="text-2xl font-semibold mb-6 flex items-center gap-2"><i data-lucide="git-merge"
-                            class="text-vercelBlue"></i> Interactive Flow</h3>
+                <div id="results-panel" class="hidden results-shell pb-20">
+                    <div class="results-header">
+                        <div>
+                            <div class="text-xs font-mono text-textSecondary uppercase tracking-[0.18em]">Analysis Results</div>
+                            <h3 class="mt-2 text-2xl font-semibold flex items-center gap-2"><i data-lucide="git-merge"
+                                    class="text-vercelBlue"></i> Interactive Flow</h3>
+                            <p class="mt-1 text-sm text-textSecondary">Review graph output, discovered assets, pipeline sections, and extracted configs without leaving the workspace.</p>
+                        </div>
+                    </div>
 
                     <div
                         class="w-full rounded-2xl border border-border bg-black/40 overflow-hidden shadow-2xl relative mb-8 group">
@@ -319,6 +614,14 @@
                     <h3 class="text-lg font-medium mb-4">Discovered Assets</h3>
                     <div id="results-content" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-12"></div>
 
+                    <div id="pipeline-reports-panel" class="hidden border-t border-border pt-12 space-y-6">
+                        <div>
+                            <h3 class="text-2xl font-semibold tracking-tight">Data Pipelines</h3>
+                            <p class="text-textSecondary text-sm mt-1">Each detected <span class="font-mono">DataPipeline</span> rendered as its own section with reformatted config, inferred flow, and original cloud definition.</p>
+                        </div>
+                        <div id="pipeline-reports-grid" class="grid grid-cols-1 gap-6"></div>
+                    </div>
+
                     <div id="extracted-config-tabs-panel" class="hidden border-t border-border pt-12 space-y-6">
                         <div class="flex items-center justify-between gap-4 flex-wrap">
                             <div>
@@ -348,6 +651,7 @@
                         </div>
                         <div id="detailed-configs-grid" class="grid grid-cols-1 gap-6"></div>
                     </div>
+                </div>
                 </div>
 
             </div>
@@ -381,7 +685,7 @@
         </div>
     </aside>
 
-    <script src="/static/app.js?v=2.7"></script>
+    <script src="/static/app.js?v=2.12"></script>
     <script>lucide.createIcons();</script>
 </body>
 

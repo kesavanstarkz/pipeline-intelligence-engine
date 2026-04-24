@@ -90,7 +90,11 @@ def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
         "dq_rules": analysis["dq_rules"],
         "flow": analysis["flow"],
         "reformatted": {
+            "pipeline_name": name,
+            "platform": "ADF",
+            "source_config": analysis["source_config"],
             "source_configs": analysis["source_config"],
+            "ingestion_config": ingestion_config,
             "ingestion_configs": ingestion_config,
             "dq_rules": analysis["dq_rules"],
             "flow": analysis["flow"],
@@ -153,7 +157,11 @@ def _extract_fabric_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
                 "dq_rules": analysis["dq_rules"],
                 "flow": analysis["flow"],
                 "reformatted": {
+                    "pipeline_name": name,
+                    "platform": "Fabric",
+                    "source_config": analysis["source_config"],
                     "source_configs": analysis["source_config"],
+                    "ingestion_config": ingestion_config,
                     "ingestion_configs": ingestion_config,
                     "dq_rules": analysis["dq_rules"],
                     "flow": analysis["flow"],
@@ -562,18 +570,22 @@ def _build_flow_graph(
     nodes: List[Dict[str, str]] = []
     edges: List[Dict[str, str]] = []
     activity_ids: Dict[str, str] = {}
+    included_activity_names: Set[str] = set()
 
     for index, candidate in enumerate(source_candidates, start=1):
         node_id = f"source_{index}"
         nodes.append({"id": node_id, "type": "source"})
 
     for index, activity in enumerate(activities, start=1):
+        if _is_notification_activity(activity):
+            continue
         node_id = _slug(_activity_label(activity)) or f"activity_{index}"
         activity_ids[_activity_label(activity)] = node_id
+        included_activity_names.add(_activity_label(activity))
         nodes.append({"id": node_id, "type": _activity_node_type(activity)})
 
     outgoing, incoming = _dependency_maps(activities)
-    root_names = [name for name in activity_ids if not incoming.get(name)]
+    root_names = [name for name in activity_ids if not [dep for dep in incoming.get(name, []) if dep in included_activity_names]]
     for index, root_name in enumerate(root_names, start=1):
         if index <= len(source_candidates):
             edges.append({"from": f"source_{index}", "to": activity_ids[root_name]})
@@ -598,7 +610,8 @@ def _build_flow_text(
     source_part = ", ".join(
         _source_candidate_label(candidate) for candidate in source_candidates
     ) if source_candidates else "No explicit source"
-    activity_part = " -> ".join(_activity_label(activity) for activity in activities) if activities else pipeline_name
+    visible_activities = [activity for activity in activities if not _is_notification_activity(activity)]
+    activity_part = " -> ".join(_activity_label(activity) for activity in visible_activities) if visible_activities else pipeline_name
     destination_part = _display_value(destination) or "no explicit sink"
     validation_part = " with validation gates" if dq_rules else ""
     return f"{source_part} -> {activity_part} -> {destination_part}{validation_part}"

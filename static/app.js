@@ -1,7 +1,10 @@
 // Global UI State
 let isAutoMode = true;
+let latestAnalysisData = null;
+let latestMergedConfigResult = null;
 
 function setMode(mode) {
+    const analysisShell = document.getElementById('analysis-shell');
     const toggleBg = document.getElementById('toggle-bg');
     const autoBtn = document.getElementById('toggle-auto');
     const manualBtn = document.getElementById('toggle-manual');
@@ -13,6 +16,7 @@ function setMode(mode) {
         resultsPanel.classList.add('hidden');
         resultsPanel.classList.remove('animate-in');
     }
+    analysisShell?.classList.remove('manual-results-active');
 
     if (mode === 'auto') {
         isAutoMode = true;
@@ -53,6 +57,613 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => toast.remove(), 4000);
     }
 
+    function setJsonField(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = JSON.stringify(value, null, 2);
+    }
+
+    function clearJsonField(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = '';
+    }
+
+    function syncAnalysisShellLayout() {
+        const analysisShell = document.getElementById('analysis-shell');
+        const resultsPanel = document.getElementById('results-panel');
+        if (!analysisShell || !resultsPanel) return;
+
+        const shouldSplit = !isAutoMode && !resultsPanel.classList.contains('hidden');
+        analysisShell.classList.toggle('manual-results-active', shouldSplit);
+    }
+
+    function fieldLabel(id) {
+        return ({
+            metadata: 'metadata.json',
+            config: 'config.json',
+            raw_json: 'raw.json',
+            'agent-extracted-config': 'extracted_config.json',
+            'agent-example-config': 'example_config.json',
+            'agent-raw-pipeline': 'raw_pipeline_json.json'
+        })[id] || id;
+    }
+
+    function stringifyForDisplay(value) {
+        return JSON.stringify(value ?? {}, null, 2);
+    }
+
+    function getJsonFieldValue(id) {
+        const el = document.getElementById(id);
+        return el ? el.value.trim() : '';
+    }
+
+    function parseJsonFieldOrEmpty(id) {
+        const value = getJsonFieldValue(id);
+        if (!value) return {};
+        return parseLooseJson(value);
+    }
+
+    function updateJsonValidationBadge(fieldId) {
+        const statusEl = document.getElementById(`${fieldId}-status`);
+        if (!statusEl) return;
+
+        const raw = getJsonFieldValue(fieldId);
+        statusEl.className = 'json-status-badge';
+
+        if (!raw) {
+            statusEl.classList.add('json-status-idle');
+            statusEl.textContent = 'Empty';
+            return;
+        }
+
+        try {
+            parseLooseJson(raw);
+            statusEl.classList.add('json-status-valid');
+            statusEl.textContent = 'Valid';
+        } catch {
+            statusEl.classList.add('json-status-invalid');
+            statusEl.textContent = 'Invalid';
+        }
+    }
+
+    function initJsonValidationBadges() {
+        ['agent-extracted-config', 'agent-example-config', 'agent-raw-pipeline'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            updateJsonValidationBadge(id);
+            el.addEventListener('input', () => updateJsonValidationBadge(id));
+            el.addEventListener('change', () => updateJsonValidationBadge(id));
+        });
+    }
+
+    function buildAgentExtractedConfig(data, reportIndex = 0) {
+        const report = Array.isArray(data?.data_pipeline_reports) ? data.data_pipeline_reports[reportIndex] : null;
+        if (report?.reformatted && typeof report.reformatted === 'object') {
+            const reformatted = report.reformatted;
+            return {
+                source_configs: reformatted.source_configs || reformatted.source_config || {},
+                ingestion_configs: reformatted.ingestion_configs || reformatted.ingestion_config || {},
+                dq_rules: Array.isArray(reformatted.dq_rules) ? reformatted.dq_rules : [],
+                flow: reformatted.flow || {},
+                missing_fields_analysis: Array.isArray(reformatted.missing_fields_analysis) ? reformatted.missing_fields_analysis : []
+            };
+        }
+
+        return {
+            source_configs: data?.source_config || {},
+            ingestion_configs: data?.ingestion_config || {},
+            dq_rules: Array.isArray(data?.dq_rules) ? data.dq_rules : [],
+            flow: data?.flow || {},
+            missing_fields_analysis: []
+        };
+    }
+
+    function buildAgentRawConfig(data, reportIndex = 0) {
+        const report = Array.isArray(data?.data_pipeline_reports) ? data.data_pipeline_reports[reportIndex] : null;
+        if (report?.original && typeof report.original === 'object') {
+            return report.original;
+        }
+        try {
+            return parseJsonFieldOrEmpty('raw_json');
+        } catch {
+            return {};
+        }
+    }
+
+    function loadConfigAgentFromAnalysis(reportIndex = 0) {
+        if (!latestAnalysisData) {
+            showToast('Run analysis or scan first to load pipeline config', 'error');
+            return;
+        }
+
+        setJsonField('agent-extracted-config', buildAgentExtractedConfig(latestAnalysisData, reportIndex));
+        setJsonField('agent-raw-pipeline', buildAgentRawConfig(latestAnalysisData, reportIndex));
+        updateJsonValidationBadge('agent-extracted-config');
+        updateJsonValidationBadge('agent-raw-pipeline');
+        const report = Array.isArray(latestAnalysisData.data_pipeline_reports) ? latestAnalysisData.data_pipeline_reports[reportIndex] : null;
+        if (report?.platform) {
+            const platformField = document.getElementById('agent-platform');
+            if (platformField && !platformField.value.trim()) {
+                platformField.value = String(report.platform).toLowerCase();
+            }
+        }
+        showToast('Config Agent loaded from pipeline output');
+    }
+
+    function renderConfigAgentResult(payload) {
+        latestMergedConfigResult = payload;
+        const output = document.getElementById('config-agent-output');
+        const accuracy = document.getElementById('config-agent-accuracy');
+        const finalConfig = document.getElementById('config-agent-final-config');
+        const mergeReport = document.getElementById('config-agent-merge-report');
+        const validationReport = document.getElementById('config-agent-validation-report');
+        const notes = document.getElementById('config-agent-notes');
+        const diffGrid = document.getElementById('config-agent-diff-grid');
+
+        if (!output || !accuracy || !finalConfig || !mergeReport || !validationReport || !notes || !diffGrid) return;
+
+        output.classList.remove('hidden');
+        accuracy.textContent = `Accuracy score: ${payload.validation_report?.accuracy_score || '--'}`;
+        finalConfig.textContent = stringifyForDisplay(payload.final_config);
+        mergeReport.textContent = stringifyForDisplay(payload.merge_report);
+        validationReport.textContent = stringifyForDisplay(payload.validation_report);
+        notes.innerHTML = (payload.architect_notes || []).map(note => `
+            <div class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-textSecondary">${note}</div>
+        `).join('');
+        renderConfigAgentDiff({
+            extracted: (() => { try { return parseJsonFieldOrEmpty('agent-extracted-config'); } catch { return {}; } })(),
+            example: (() => { try { return parseJsonFieldOrEmpty('agent-example-config'); } catch { return {}; } })(),
+            finalConfig: payload.final_config || {},
+            finalCore: payload.final_core || {},
+        });
+    }
+
+    function renderConfigAgentDiff({ extracted = {}, example = {}, finalConfig = {}, finalCore = {} } = {}) {
+        const diffGrid = document.getElementById('config-agent-diff-grid');
+        if (!diffGrid) return;
+
+        const flattenObject = (obj, prefix = '') => {
+            const rows = [];
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+                rows.push([prefix || '(root)', obj]);
+                return rows;
+            }
+            Object.entries(obj).forEach(([key, value]) => {
+                const path = prefix ? `${prefix}.${key}` : key;
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    rows.push(...flattenObject(value, path));
+                } else {
+                    rows.push([path, value]);
+                }
+            });
+            return rows;
+        };
+
+        const extractedMap = Object.fromEntries(flattenObject(extracted));
+        const exampleMap = Object.fromEntries(flattenObject(example));
+        const finalMap = Object.fromEntries(flattenObject(finalConfig));
+        const allPaths = Array.from(new Set([...Object.keys(extractedMap), ...Object.keys(exampleMap), ...Object.keys(finalMap)])).sort();
+
+        const renderCell = (value, kind) => {
+            const display = value === undefined ? '—' : (typeof value === 'object' ? JSON.stringify(value) : String(value));
+            return `<div class="config-diff-cell config-diff-${kind}">${escapeHtml(display)}</div>`;
+        };
+
+        const rows = allPaths.map((path) => {
+            const left = extractedMap[path];
+            const middle = exampleMap[path];
+            const right = finalMap[path];
+            const changed = String(left) !== String(right) || String(middle) !== String(right);
+            return `
+                <div class="config-diff-table-row ${changed ? 'config-diff-table-row-changed' : ''}">
+                    <div class="config-diff-path">${escapeHtml(path)}</div>
+                    ${renderCell(left, 'extracted')}
+                    ${renderCell(middle, 'example')}
+                    ${renderCell(right, 'final')}
+                </div>
+            `;
+        }).join('') || `<div class="config-diff-empty">No diff data available.</div>`;
+
+        diffGrid.innerHTML = `
+            <div class="config-diff-table">
+                <div class="config-diff-table-head">
+                    <div class="config-diff-head-path">Field Path</div>
+                    <div class="config-diff-head-col">Extracted</div>
+                    <div class="config-diff-head-col">Reference</div>
+                    <div class="config-diff-head-col">Final</div>
+                </div>
+                <div class="config-diff-table-body custom-scrollbar">${rows}</div>
+            </div>
+            <div class="config-diff-summary">
+                <div class="config-diff-summary-card">
+                    <div class="config-diff-summary-label">Final Shape</div>
+                    <div class="config-diff-summary-value">Reference-preserving document</div>
+                </div>
+                <div class="config-diff-summary-card">
+                    <div class="config-diff-summary-label">Pipeline Core</div>
+                    <pre class="config-diff-summary-pre custom-scrollbar">${escapeHtml(stringifyForDisplay(finalCore))}</pre>
+                </div>
+            </div>
+        `;
+    }
+
+    function openConfigAgent(reportIndex = 0) {
+        setMode('manual');
+        loadConfigAgentFromAnalysis(reportIndex);
+        const section = document.getElementById('config-agent-section');
+        section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function bindJsonCopyButtons(root = document) {
+        root.querySelectorAll('.json-panel-copy-btn').forEach((btn) => {
+            btn.onclick = () => {
+                const json = decodeURIComponent(btn.dataset.copyJson || '');
+                copyToClipboard(json, 'Copied JSON');
+            };
+        });
+    }
+
+    function parseLooseJson(text) {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return null;
+        return JSON.parse(trimmed);
+    }
+
+    function beautifyField(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const current = el.value.trim();
+        if (!current) return;
+        const parsed = parseLooseJson(current);
+        if (parsed) {
+            setJsonField(id, parsed);
+        }
+    }
+
+    function autoDetectImportTarget(raw) {
+        if (!raw || typeof raw !== 'object') return 'raw_json';
+
+        const keys = Object.keys(raw);
+        const lowerKeys = keys.map(key => String(key).toLowerCase());
+        const rawText = JSON.stringify(raw).toLowerCase();
+
+        if (
+            lowerKeys.includes('raw_cloud_dump') ||
+            lowerKeys.includes('activities') ||
+            lowerKeys.includes('definition') ||
+            lowerKeys.includes('type') ||
+            rawText.includes('pipeline-content.json') ||
+            rawText.includes('datafactory') ||
+            rawText.includes('fabric')
+        ) {
+            return 'raw_json';
+        }
+
+        if (
+            lowerKeys.includes('source') ||
+            lowerKeys.includes('destination') ||
+            lowerKeys.includes('connections') ||
+            lowerKeys.includes('input') ||
+            lowerKeys.includes('output') ||
+            lowerKeys.includes('schedule')
+        ) {
+            return 'config';
+        }
+
+        return 'metadata';
+    }
+
+    function applyImportedJson(raw, targetOverride = null) {
+        if (!raw || typeof raw !== 'object') {
+            throw new Error('Expected a JSON object');
+        }
+
+        const selectedTarget = targetOverride || document.getElementById('import-target')?.value || 'auto';
+        const finalTarget = selectedTarget === 'auto' ? autoDetectImportTarget(raw) : selectedTarget;
+        setJsonField(finalTarget, raw);
+
+        if (finalTarget !== 'metadata') {
+            maybeApplyMetadataHint(raw);
+        }
+
+        const labels = {
+            metadata: 'metadata.json',
+            config: 'config.json',
+            raw_json: 'raw.json'
+        };
+        showToast(`Imported JSON into ${labels[finalTarget] || finalTarget}`);
+    }
+
+    function inferMetadataHint(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+
+        const rawText = JSON.stringify(raw).toLowerCase();
+        if (raw?.type === 'adf_pipeline' || rawText.includes('datafactory') || rawText.includes('microsoft.datafactory')) {
+            return { platform: 'adf' };
+        }
+        if (rawText.includes('fabric') || rawText.includes('pipeline-content.json') || rawText.includes('workspaceid')) {
+            return { platform: 'fabric' };
+        }
+        if (rawText.includes('glue') || rawText.includes('lambda') || rawText.includes('apigateway')) {
+            return { platform: 'aws' };
+        }
+        if (rawText.includes('bigquery') || rawText.includes('gcp') || rawText.includes('cloud run')) {
+            return { platform: 'gcp' };
+        }
+        return null;
+    }
+
+    function maybeApplyMetadataHint(raw) {
+        const metadataEl = document.getElementById('metadata');
+        if (!metadataEl) return;
+
+        const current = metadataEl.value.trim();
+        if (current) return;
+
+        const hint = inferMetadataHint(raw);
+        if (hint) {
+            setJsonField('metadata', hint);
+        }
+    }
+
+    const cloudJsonPaste = document.getElementById('cloud-json-paste');
+    const cloudJsonUpload = document.getElementById('cloud-json-upload');
+    const importCloudJsonBtn = document.getElementById('import-cloud-json-btn');
+    const clearCloudJsonBtn = document.getElementById('clear-cloud-json-btn');
+    const configDropzone = document.getElementById('config-dropzone');
+
+    if (cloudJsonUpload && cloudJsonPaste) {
+        cloudJsonUpload.addEventListener('change', async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                parseLooseJson(text);
+                cloudJsonPaste.value = text;
+                showToast(`Loaded ${file.name}`);
+            } catch (error) {
+                showToast('Uploaded file is not valid JSON', 'error');
+            }
+        });
+    }
+
+    async function handleDirectJsonUpload(event) {
+        const input = event.target;
+        const file = input.files?.[0];
+        const targetField = input.dataset.targetField;
+        if (!file || !targetField) return;
+
+        try {
+            const text = await file.text();
+            const parsed = parseLooseJson(text);
+            setJsonField(targetField, parsed);
+            updateJsonValidationBadge(targetField);
+            showToast(`Loaded ${file.name} into ${fieldLabel(targetField)}`);
+        } catch (error) {
+            showToast(`Uploaded ${fieldLabel(targetField)} file is not valid JSON`, 'error');
+        } finally {
+            input.value = '';
+        }
+    }
+
+    document.querySelectorAll('.json-direct-upload').forEach((input) => {
+        input.addEventListener('change', handleDirectJsonUpload);
+    });
+    initJsonValidationBadges();
+
+    if (importCloudJsonBtn && cloudJsonPaste) {
+        importCloudJsonBtn.addEventListener('click', () => {
+            try {
+                const parsed = parseLooseJson(cloudJsonPaste.value);
+                if (!parsed) {
+                    throw new Error('No JSON supplied');
+                }
+                applyImportedJson(parsed);
+            } catch (error) {
+                showToast(error.message || 'Failed to import JSON', 'error');
+            }
+        });
+    }
+
+    if (clearCloudJsonBtn && cloudJsonPaste && cloudJsonUpload) {
+        clearCloudJsonBtn.addEventListener('click', () => {
+            cloudJsonPaste.value = '';
+            cloudJsonUpload.value = '';
+        });
+    }
+
+    document.querySelectorAll('.quick-import-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            try {
+                const parsed = parseLooseJson(cloudJsonPaste?.value || '');
+                if (!parsed) {
+                    throw new Error('Paste or upload JSON first');
+                }
+                applyImportedJson(parsed, btn.dataset.importTarget);
+            } catch (error) {
+                showToast(error.message || 'Import failed', 'error');
+            }
+        });
+    });
+
+    document.querySelectorAll('.field-beautify-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            try {
+                beautifyField(btn.dataset.targetField);
+                updateJsonValidationBadge(btn.dataset.targetField);
+                showToast(`${fieldLabel(btn.dataset.targetField)} formatted`);
+            } catch (error) {
+                showToast('Could not beautify JSON', 'error');
+            }
+        });
+    });
+
+    document.querySelectorAll('[data-editor-action="true"]').forEach((element) => {
+        element.addEventListener('click', (event) => {
+            event.stopPropagation();
+        });
+    });
+
+    const beautifyAllBtn = document.getElementById('beautify-json-btn');
+    if (beautifyAllBtn) {
+        beautifyAllBtn.addEventListener('click', () => {
+            try {
+                ['metadata', 'config', 'raw_json'].forEach(beautifyField);
+                showToast('JSON fields formatted');
+            } catch (error) {
+                showToast('Could not beautify JSON', 'error');
+            }
+        });
+    }
+
+    const clearAllJsonBtn = document.getElementById('clear-all-json-btn');
+    if (clearAllJsonBtn) {
+        clearAllJsonBtn.addEventListener('click', () => {
+            ['metadata', 'config', 'raw_json'].forEach(clearJsonField);
+            if (cloudJsonPaste) cloudJsonPaste.value = '';
+            if (cloudJsonUpload) cloudJsonUpload.value = '';
+            showToast('Manual inputs cleared');
+        });
+    }
+
+    const agentUseLatestExtractedBtn = document.getElementById('agent-use-latest-extracted-btn');
+    if (agentUseLatestExtractedBtn) {
+        agentUseLatestExtractedBtn.addEventListener('click', () => openConfigAgent(0));
+    }
+
+    const agentUseLatestRawBtn = document.getElementById('agent-use-latest-raw-btn');
+    if (agentUseLatestRawBtn) {
+        agentUseLatestRawBtn.addEventListener('click', () => {
+            if (latestAnalysisData) {
+                setJsonField('agent-raw-pipeline', buildAgentRawConfig(latestAnalysisData, 0));
+                updateJsonValidationBadge('agent-raw-pipeline');
+                showToast('Loaded latest raw pipeline JSON');
+                return;
+            }
+            const rawFieldValue = getJsonFieldValue('raw_json');
+            if (rawFieldValue) {
+                document.getElementById('agent-raw-pipeline').value = rawFieldValue;
+                updateJsonValidationBadge('agent-raw-pipeline');
+                showToast('Loaded raw pipeline JSON from manual editor');
+                return;
+            }
+            showToast('No raw pipeline JSON available yet', 'error');
+        });
+    }
+
+    const generateMergedConfigBtn = document.getElementById('generate-merged-config-btn');
+    if (generateMergedConfigBtn) {
+        generateMergedConfigBtn.addEventListener('click', async () => {
+            const btnText = generateMergedConfigBtn.querySelector('.btn-text');
+            const spinner = generateMergedConfigBtn.querySelector('.spinner-container');
+            try {
+                const payload = {
+                    raw_pipeline_json: parseJsonFieldOrEmpty('agent-raw-pipeline'),
+                    extracted_config: parseJsonFieldOrEmpty('agent-extracted-config'),
+                    example_config: parseJsonFieldOrEmpty('agent-example-config'),
+                    ui_inputs: {
+                        platform: document.getElementById('agent-platform')?.value?.trim() || '',
+                        ingestion_type: document.getElementById('agent-ingestion-type')?.value?.trim() || '',
+                        dq_preference: document.getElementById('agent-dq-preference')?.value?.trim() || '',
+                    },
+                    use_llm: !!document.getElementById('agent-use-llm')?.checked,
+                };
+
+                btnText.style.opacity = '0';
+                spinner.classList.remove('hidden');
+                generateMergedConfigBtn.disabled = true;
+
+                const response = await fetch('/analyze/final-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.detail || 'Final config merge failed');
+                }
+                renderConfigAgentResult(result);
+                showToast('Merged config generated');
+            } catch (error) {
+                showToast(error.message || 'Final config merge failed', 'error');
+            } finally {
+                btnText.style.opacity = '1';
+                spinner.classList.add('hidden');
+                generateMergedConfigBtn.disabled = false;
+            }
+        });
+    }
+
+    const agentCopyMergedBtn = document.getElementById('agent-copy-merged-btn');
+    if (agentCopyMergedBtn) {
+        agentCopyMergedBtn.addEventListener('click', () => {
+            if (!latestMergedConfigResult?.final_config) {
+                showToast('Generate a merged config first', 'error');
+                return;
+            }
+            copyToClipboard(stringifyForDisplay(latestMergedConfigResult.final_config), 'Copied merged config');
+        });
+    }
+
+    const agentCopyFinalConfigBtn = document.getElementById('agent-copy-final-config-btn');
+    if (agentCopyFinalConfigBtn) {
+        agentCopyFinalConfigBtn.addEventListener('click', () => {
+            if (!latestMergedConfigResult?.final_config) {
+                showToast('Generate a merged config first', 'error');
+                return;
+            }
+            copyToClipboard(stringifyForDisplay(latestMergedConfigResult.final_config), 'Copied final config');
+        });
+    }
+
+    const navAnalysis = document.getElementById('nav-analysis');
+    if (navAnalysis) {
+        navAnalysis.addEventListener('click', () => {
+            const shell = document.getElementById('analysis-shell');
+            setMode(isAutoMode ? 'auto' : 'manual');
+            shell?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
+    const navConfigAgent = document.getElementById('nav-config-agent');
+    if (navConfigAgent) {
+        navConfigAgent.addEventListener('click', () => {
+            setMode('manual');
+            const section = document.getElementById('config-agent-section');
+            section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    }
+
+    if (configDropzone && cloudJsonPaste) {
+        ['dragenter', 'dragover'].forEach((eventName) => {
+            configDropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                configDropzone.classList.add('dropzone-active');
+            });
+        });
+        ['dragleave', 'drop'].forEach((eventName) => {
+            configDropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                configDropzone.classList.remove('dropzone-active');
+            });
+        });
+
+        configDropzone.addEventListener('drop', async (event) => {
+            const file = event.dataTransfer?.files?.[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                parseLooseJson(text);
+                cloudJsonPaste.value = text;
+                if (cloudJsonUpload) cloudJsonUpload.value = '';
+                showToast(`Loaded ${file.name}`);
+            } catch (error) {
+                showToast('Dropped file is not valid JSON', 'error');
+            }
+        });
+    }
+
     // --- Active Cloud Scan ---
     const liveScanBtn = document.getElementById('live-scan-btn');
     if (liveScanBtn) {
@@ -69,6 +680,7 @@ document.addEventListener('DOMContentLoaded', () => {
             aiLoaderSteps.classList.remove('hidden');
             resultsPanel.classList.add('hidden');
             resultsPanel.classList.remove('animate-in'); // reset anim
+            syncAnalysisShellLayout();
             
             // AI Loader step simulation
             const steps = [
@@ -132,6 +744,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const resultsPanel = document.getElementById('results-panel');
             const useLlm = document.getElementById('workspace-use-llm')?.checked;
             workspaceDiscoverBtn.disabled = true;
+            resultsPanel?.classList.add('hidden');
+            syncAnalysisShellLayout();
             try {
                 const response = await fetch('/discover/workspace', {
                     method: 'POST',
@@ -150,6 +764,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderResults(data);
                 showToast('Folder discovery complete');
                 resultsPanel?.classList.remove('hidden');
+                syncAnalysisShellLayout();
             } catch (e) {
                 showToast(e.message || 'Discovery failed', 'error');
             } finally {
@@ -185,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
             spinner.classList.remove('hidden');
             btn.disabled = true;
             resultsPanel.classList.add('hidden');
+            syncAnalysisShellLayout();
 
             try {
                 const [analysisResponse, pipelineResponse] = await Promise.all([
@@ -346,11 +962,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderJsonPanel(title, icon, value, extraClass = '') {
+        const serialized = encodeURIComponent(JSON.stringify(value ?? {}, null, 2));
         return `
             <div class="bg-black/60 p-4 rounded-xl border border-white/10 ${extraClass}">
-                <h5 class="text-[10px] uppercase font-bold text-white mb-3 flex items-center gap-1.5 opacity-90">
-                    <i data-lucide="${icon}" class="w-3.5 h-3.5 text-vercelBlue"></i>${title}
-                </h5>
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <h5 class="text-[10px] uppercase font-bold text-white flex items-center gap-1.5 opacity-90">
+                        <i data-lucide="${icon}" class="w-3.5 h-3.5 text-vercelBlue"></i>${title}
+                    </h5>
+                    <button type="button" class="json-panel-copy-btn px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] font-semibold text-textSecondary hover:text-white" data-copy-json="${serialized}">Copy</button>
+                </div>
                 <pre class="text-[10px] text-gray-300 font-mono tracking-tight leading-relaxed whitespace-pre-wrap break-words"><code>${escapeHtml(JSON.stringify(value ?? {}, null, 2))}</code></pre>
             </div>
         `;
@@ -381,6 +1001,82 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         return html;
+    }
+
+    function renderPipelineReportSections(pipelineReports) {
+        const panel = document.getElementById('pipeline-reports-panel');
+        const grid = document.getElementById('pipeline-reports-grid');
+        if (!panel || !grid) return;
+
+        if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
+            panel.classList.add('hidden');
+            grid.innerHTML = '';
+            return;
+        }
+
+        panel.classList.remove('hidden');
+        grid.innerHTML = pipelineReports.map((report, index) => {
+            const reformatted = report?.reformatted || {};
+            const flowText = report?.flow?.text || reformatted?.flow?.text || reformatted?.flow || 'unknown';
+            const missing = Array.isArray(reformatted?.missing_fields_analysis) ? reformatted.missing_fields_analysis : [];
+            const dqRules = Array.isArray(report?.dq_rules) ? report.dq_rules : [];
+
+            return `
+                <section class="rounded-2xl border border-border bg-surface overflow-hidden">
+                    <div class="px-5 py-4 border-b border-border bg-black/20 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                        <div>
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="px-2 py-0.5 rounded-md bg-vercelBlue/10 border border-vercelBlue/20 text-vercelBlue text-[10px] font-bold uppercase tracking-wider">${escapeHtml(report.type || 'DataPipeline')}</span>
+                                <span class="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-textSecondary text-[10px] font-bold uppercase tracking-wider">${escapeHtml(report.platform || 'unknown')}</span>
+                            </div>
+                            <h4 class="text-lg font-semibold text-white">${escapeHtml(report.pipeline_name || `Pipeline ${index + 1}`)}</h4>
+                            <p class="text-xs text-textSecondary mt-1">${escapeHtml(flowText)}</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2 items-center">
+                            ${dqRules.map(rule => `<span class="px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold uppercase tracking-wider">${escapeHtml(rule)}</span>`).join('')}
+                            <button type="button" class="pipeline-agent-load-btn px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-textSecondary text-xs font-semibold hover:text-white" data-report-index="${index}">Use In Config Agent</button>
+                            <button type="button" class="pipeline-agent-copy-btn px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-textSecondary text-xs font-semibold hover:text-white" data-report-index="${index}">Copy Extracted Config</button>
+                        </div>
+                    </div>
+                    <div class="p-5 space-y-4">
+                        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                            ${renderJsonPanel('Reformatted', 'wand-2', reformatted)}
+                            ${renderJsonPanel('Original Cloud JSON', 'file-json', report?.original || {})}
+                        </div>
+                        ${missing.length ? `
+                            <div class="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                                <h5 class="text-[11px] uppercase tracking-widest text-amber-400 font-semibold mb-3">Missing Fields Analysis</h5>
+                                <div class="space-y-2">
+                                    ${missing.map(item => `
+                                        <div class="flex flex-col gap-1 border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                                            <div class="text-[10px] font-semibold text-white font-mono">${escapeHtml(item.field || 'unknown')}</div>
+                                            <div class="text-xs text-textSecondary">${escapeHtml(item.reason || 'No reason provided')}</div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${report?.reasoning ? renderJsonPanel('Local LLM Reasoning', 'brain', report.reasoning) : ''}
+                    </div>
+                </section>
+            `;
+        }).join('');
+
+        lucide.createIcons({ root: grid });
+        bindJsonCopyButtons(grid);
+        grid.querySelectorAll('.pipeline-agent-load-btn').forEach((btn) => {
+            btn.onclick = () => openConfigAgent(Number(btn.dataset.reportIndex || 0));
+        });
+        grid.querySelectorAll('.pipeline-agent-copy-btn').forEach((btn) => {
+            btn.onclick = () => {
+                if (!latestAnalysisData) {
+                    showToast('No extracted config available', 'error');
+                    return;
+                }
+                const payload = buildAgentExtractedConfig(latestAnalysisData, Number(btn.dataset.reportIndex || 0));
+                copyToClipboard(stringifyForDisplay(payload), 'Copied extracted config');
+            };
+        });
     }
 
     function normalizePipelineReports(pipelineReports) {
@@ -549,9 +1245,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function renderResults(data) {
-        if (data.data_pipeline_reports && (!data.nodes || data.nodes.length === 0) && (!data.pipelines || data.pipelines.length === 0)) {
+        if (data.data_pipeline_reports && (!data.nodes || data.nodes.length === 0)) {
             data = mergeAnalysisWithPipelineReports(data, data.data_pipeline_reports);
         }
+        latestAnalysisData = data;
 
         const resultsPanel = document.getElementById('results-panel');
         const resultsContent = document.getElementById('results-content');
@@ -562,6 +1259,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultsPanel.classList.remove('hidden');
         void resultsPanel.offsetWidth;
         resultsPanel.classList.add('animate-in');
+        syncAnalysisShellLayout();
         
         // --- 1. Narrative Panel ---
         const frameworks = (data.framework?.length) || 0;
@@ -921,6 +1619,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
             `;
+            bindJsonCopyButtons(summary);
             
             // Show raw data in evidence
             document.getElementById('evidence-panel').classList.remove('hidden');
@@ -973,10 +1672,13 @@ document.addEventListener('DOMContentLoaded', () => {
         
         lucide.createIcons({ root: resultsContent });
 
-        // --- 4. Extracted config tabs ---
+        // --- 4. DataPipeline sections ---
+        renderPipelineReportSections(data.data_pipeline_reports);
+
+        // --- 5. Extracted config tabs ---
         renderExtractedConfigTabs(data);
 
-        // --- 5. Detailed Configs Rendering ---
+        // --- 6. Detailed Configs Rendering ---
         renderDetailedConfigs(data);
     }
 
@@ -1069,9 +1771,13 @@ document.addEventListener('DOMContentLoaded', () => {
         searchInput.oninput = (e) => renderItems(e.target.value);
     }
 
-    window.copyToClipboard = (text) => {
-        navigator.clipboard.writeText(text);
-        showToast('Copied to clipboard');
+    window.copyToClipboard = async (text, message = 'Copied to clipboard') => {
+        try {
+            await navigator.clipboard.writeText(text);
+            showToast(message);
+        } catch {
+            showToast('Copy failed', 'error');
+        }
     };
 
     // Check for success/errors in URL (e.g., from SSO redirect)

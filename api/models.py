@@ -56,6 +56,28 @@ class WorkspaceDiscoverRequest(BaseModel):
     )
 
 
+class FinalConfigUIInputs(BaseModel):
+    platform: str = ""
+    ingestion_type: str = ""
+    dq_preference: str = ""
+
+
+class FinalConfigRequest(BaseModel):
+    raw_pipeline_json: Dict[str, Any] = Field(default_factory=dict)
+    extracted_config: Dict[str, Any] = Field(default_factory=dict)
+    example_config: Dict[str, Any] = Field(default_factory=dict)
+    ui_inputs: FinalConfigUIInputs = Field(default_factory=FinalConfigUIInputs)
+    use_llm: bool = False
+
+
+class FinalConfigResponse(BaseModel):
+    final_config: Dict[str, Any]
+    final_core: Dict[str, Any]
+    merge_report: Dict[str, List[Any]]
+    validation_report: Dict[str, Any]
+    architect_notes: List[str]
+
+
 class ConfidenceScores(BaseModel):
     framework: Optional[float] = None
     source: Optional[float] = None

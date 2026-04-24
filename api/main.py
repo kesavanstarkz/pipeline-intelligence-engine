@@ -24,11 +24,14 @@ from api.models import (
     AnalyzeRequest,
     AnalyzeResponse,
     DataPipelineAnalyzeResponse,
+    FinalConfigRequest,
+    FinalConfigResponse,
     WorkspaceDiscoverRequest,
 )
 from config.settings import settings
 from engine.datahub_client import datahub_client
 from engine.data_pipeline_analyzer import analyze_data_pipelines
+from engine.final_config_merger import finalize_pipeline_config
 from engine.pipeline_engine import PipelineIntelligenceEngine
 from engine.registry import get_all_detectors
 from engine.discovery.local_scanner import resolve_safe_root, scan_local_workspace
@@ -167,6 +170,30 @@ async def analyze_data_pipeline_workflows(request: AnalyzeRequest) -> DataPipeli
         ) from exc
 
     return DataPipelineAnalyzeResponse(root=payload)
+
+
+@app.post(
+    "/analyze/final-config",
+    response_model=FinalConfigResponse,
+    summary="Merge extracted config, example config, and raw pipeline JSON into a final config",
+)
+async def analyze_final_config(request: FinalConfigRequest) -> FinalConfigResponse:
+    try:
+        result = finalize_pipeline_config(
+            raw_pipeline_json=request.raw_pipeline_json,
+            extracted_config=request.extracted_config,
+            example_config=request.example_config,
+            ui_inputs=request.ui_inputs.model_dump(),
+            use_llm=bool(request.use_llm and settings.llm_enabled),
+        )
+    except Exception as exc:
+        logger.exception("Final config merge failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Final config merge failed: {exc}",
+        ) from exc
+
+    return FinalConfigResponse(**result)
 
 
 @app.post(
@@ -347,14 +374,6 @@ async def scan_cloud(
                         cloud_paths.add(t_id.split("||")[0].strip().upper())
                         evidence.append(f"Hardened link to target '{t_id}'.")
                         
-            # Apply Service Normalization Defaults if edges are empty
-            if not pipe_targets and target_nodes:
-                pipe_targets.append(target_nodes[len(safe_pipelines) % len(target_nodes)]["id"])
-                evidence.append(f"Heuristics applied for TARGET fallback.")
-            if not pipe_sources and source_nodes:
-                pipe_sources.append(source_nodes[len(safe_pipelines) % len(source_nodes)]["id"])
-                evidence.append(f"Heuristics applied for SOURCE fallback.")
-                
             # Attach deep config for the UI side-panel
             config_payload = {
                 "runtime": i_node.get("configuration", {}).get("Runtime"),
@@ -449,7 +468,7 @@ async def scan_cloud(
             confidence=result.confidence,
             llm_inference=result.llm_inference,
             datahub_lineage=result.datahub_lineage,
-            pipelines=safe_pipelines,
+            pipelines=result.pipelines,
             data_pipeline_reports=result.data_pipeline_reports,
             evidence={"Live Scan Telemetry Extract": evidence_list},
             source_config=result.source_config,
