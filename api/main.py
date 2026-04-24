@@ -129,6 +129,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         data_pipeline_reports=result.data_pipeline_reports,
         evidence=result.evidence,
         source_config=result.source_config,
+        source_support=result.source_support,
         ingestion_config=result.ingestion_config,
         detailed_inventory=result.detailed_inventory,
         expert_extraction=result.expert_extraction,
@@ -267,6 +268,7 @@ async def discover_workspace(body: WorkspaceDiscoverRequest) -> AnalyzeResponse:
         data_pipeline_reports=result.data_pipeline_reports,
         evidence=ev,
         source_config=result.source_config,
+        source_support=result.source_support,
         ingestion_config=result.ingestion_config,
         detailed_inventory=result.detailed_inventory,
         expert_extraction=result.expert_extraction,
@@ -472,6 +474,7 @@ async def scan_cloud(
             data_pipeline_reports=result.data_pipeline_reports,
             evidence={"Live Scan Telemetry Extract": evidence_list},
             source_config=result.source_config,
+            source_support=result.source_support,
             ingestion_config=result.ingestion_config,
             storage_config=result.storage_config,
             dq_config=result.dq_config,
@@ -510,7 +513,15 @@ async def list_detectors() -> Dict[str, List[str]]:
 @app.get("/", summary="Interactive Dashboard")
 async def root(request: Request):
     """Serve the single-page application dashboard."""
-    return templates.TemplateResponse("index.html", {"request": request, "settings": settings})
+    static_version = "20260424-2"
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "settings": settings,
+            "static_version": static_version,
+        },
+    )
 
 
 @app.get("/api/config/keys", summary="Get Configured Providers")

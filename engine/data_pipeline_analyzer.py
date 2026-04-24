@@ -44,7 +44,29 @@ def analyze_data_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
     pipelines: List[Dict[str, Any]] = []
     pipelines.extend(_extract_adf_pipelines(payload))
     pipelines.extend(_extract_fabric_pipelines(payload))
-    return pipelines
+    return _dedupe_pipeline_reports(pipelines)
+
+
+def _dedupe_pipeline_reports(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for report in reports:
+        key = json.dumps(
+            {
+                "type": report.get("type"),
+                "platform": report.get("platform"),
+                "pipeline_name": report.get("pipeline_name"),
+                "flow_graph": report.get("flow", {}).get("graph", {}),
+                "original": report.get("original", {}),
+            },
+            sort_keys=True,
+            default=str,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(report)
+    return deduped
 
 
 def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:

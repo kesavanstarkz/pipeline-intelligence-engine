@@ -124,6 +124,25 @@ class TestAnalyzeEndpoint:
         assert data["dq_config"]["great_expectations"]["suite_names"] == ["orders_suite"]
         assert data["dq_config"]["sql_checks"]["count"] == 1
 
+    def test_source_support_matrix_marks_supported_and_detection_only_sources(self):
+        body = {
+            "config": {
+                "input": "s3://landing/orders/",
+                "query_language": "graphql",
+            }
+        }
+        data = _post(body)
+
+        supported_names = {item["name"] for item in data["source_support"]["catalog"]["supported_source_types"]}
+        unsupported_names = {item["name"] for item in data["source_support"]["catalog"]["unsupported_source_types"]}
+        detected_supported = {item["name"] for item in data["source_support"]["detected"]["supported_source_types"]}
+        detected_unsupported = {item["name"] for item in data["source_support"]["detected"]["unsupported_source_types"]}
+
+        assert "S3" in supported_names
+        assert "GraphQL" in unsupported_names
+        assert "S3" in detected_supported
+        assert "GraphQL" in detected_unsupported
+
     def test_storage_config_from_cloud_inventory(self):
         body = {
             "raw_json": {

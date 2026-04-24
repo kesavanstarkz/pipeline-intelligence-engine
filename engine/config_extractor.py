@@ -23,6 +23,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from engine.detectors.base import AnalysisPayload
+from engine.detectors.source_detector import SOURCE_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +329,76 @@ _SOURCE_EXTRACTORS: Dict[str, Any] = {
     "REST API":          _extract_rest_api_config,
     "Microsoft Fabric":  _extract_fabric_source_config,
 }
+
+_DETECTED_ONLY_SOURCE_REASONS: Dict[str, str] = {
+    "DynamoDB": "The engine can detect DynamoDB references, but there is no dedicated source extractor yet for table names, keys, stream settings, or IAM-backed connection details.",
+    "Cosmos DB": "The engine can detect Cosmos DB usage, but it does not yet normalize account, database, container, or authentication metadata into structured source_config output.",
+    "MongoDB": "MongoDB is pattern-detected only. Cluster, database, collection, and credential extraction are not implemented in the current source extractor layer.",
+    "Kinesis": "Kinesis streams are recognized from payload text, but stream-specific details such as stream name, consumer configuration, and region are not extracted into a typed source config.",
+    "Event Hubs": "Azure Event Hubs is detected heuristically, but namespace, hub, consumer group, and auth extraction are not implemented yet.",
+    "GraphQL": "GraphQL endpoints can be recognized from payload markers, but the engine does not yet parse GraphQL schemas, operations, or endpoint configuration into structured source metadata.",
+    "SOAP/WS": "SOAP or WSDL usage is detected from payload text, but there is no WSDL-aware parser that can extract service, operation, and binding details.",
+    "SFTP": "SFTP sources are detected from URI or library markers, but host, port, remote path, and credential normalization are not yet modeled in source_config.",
+    "FTP": "FTP sources are detected from URI or library markers, but the engine does not yet produce structured connection details for FTP endpoints.",
+    "Local FS": "Local filesystem inputs are environment-specific and not portable across deployments, so the engine only flags them instead of emitting a normalized source configuration.",
+}
+
+
+def build_source_support_matrix(detected_sources: List[str]) -> Dict[str, Any]:
+    """
+    Summarize which source types are fully supported versus detection-only.
+
+    Supported means the engine has both recognition and a structured extractor.
+    Detection-only means the detector can flag the source, but no dedicated
+    extractor exists yet to emit typed source_config details.
+    """
+    detected_set = set(detected_sources or [])
+    catalog_names = list(
+        dict.fromkeys(
+            [display_name for display_name, _ in SOURCE_PATTERNS]
+            + list(_SOURCE_EXTRACTORS.keys())
+        )
+    )
+
+    supported_source_types: List[Dict[str, Any]] = []
+    unsupported_source_types: List[Dict[str, Any]] = []
+
+    for source_name in catalog_names:
+        is_supported = source_name in _SOURCE_EXTRACTORS
+        base_record = {
+            "name": source_name,
+            "detected": source_name in detected_set,
+        }
+        if is_supported:
+            supported_source_types.append(
+                {
+                    **base_record,
+                    "support_level": "supported",
+                    "explanation": "This source type has a dedicated rule-based extractor, so the engine can return structured connection details in source_config when it is detected.",
+                }
+            )
+        else:
+            unsupported_source_types.append(
+                {
+                    **base_record,
+                    "support_level": "detected_only",
+                    "explanation": _DETECTED_ONLY_SOURCE_REASONS.get(
+                        source_name,
+                        "This source type can be identified heuristically, but the current engine does not yet have a dedicated structured extractor for it.",
+                    ),
+                }
+            )
+
+    return {
+        "detected": {
+            "supported_source_types": [item for item in supported_source_types if item["detected"]],
+            "unsupported_source_types": [item for item in unsupported_source_types if item["detected"]],
+        },
+        "catalog": {
+            "supported_source_types": supported_source_types,
+            "unsupported_source_types": unsupported_source_types,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

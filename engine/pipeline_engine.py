@@ -19,6 +19,7 @@ from engine.datahub_client import DataHubClient, datahub_client as _default_clie
 from engine.detectors.base import AnalysisPayload, DetectionResult
 from engine.registry import get_all_detectors
 from engine.config_extractor import (
+    build_source_support_matrix,
     extract_dq_configs,
     extract_expert_config,
     extract_ingestion_configs,
@@ -159,6 +160,7 @@ class AnalysisResult:
         self.nodes = None
         self.flow = None
         self.source_config = None
+        self.source_support = None
         self.ingestion_config = None
         self.storage_config = None
         self.dq_config = None
@@ -181,6 +183,7 @@ class AnalysisResult:
             "nodes":            self.nodes,
             "flow":             self.flow,
             "source_config":    self.source_config,
+            "source_support":   self.source_support,
             "ingestion_config": self.ingestion_config,
             "storage_config":   self.storage_config,
             "dq_config":        self.dq_config,
@@ -288,6 +291,7 @@ class PipelineIntelligenceEngine:
         res.source_config = extract_source_configs(
             category_results["source"], payload
         ) or None
+        res.source_support = build_source_support_matrix(category_results["source"]) or None
         res.ingestion_config = extract_ingestion_configs(
             category_results["ingestion"], payload
         ) or None

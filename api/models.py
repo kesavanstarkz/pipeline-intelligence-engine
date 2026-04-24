@@ -121,6 +121,9 @@ class AnalyzeResponse(BaseModel):
     source_config:   Optional[Dict[str, Any]] = Field(
         default=None, description="Extracted properties for dynamic source integrations"
     )
+    source_support: Optional[Dict[str, Any]] = Field(
+        default=None, description="Support matrix for detected and catalogued source types, including explanation for detection-only types"
+    )
     ingestion_config: Optional[Dict[str, Any]] = Field(
         default=None, description="Extracted properties for compute transformations"
     )

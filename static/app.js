@@ -980,6 +980,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const reformatted = report?.reformatted || {};
         const original = report?.original || {};
         const reasoning = report?.reasoning || null;
+        const sourceSupport = latestAnalysisData?.source_support || null;
+        const detectedSupported = Array.isArray(sourceSupport?.detected?.supported_source_types) ? sourceSupport.detected.supported_source_types : [];
+        const detectedUnsupported = Array.isArray(sourceSupport?.detected?.unsupported_source_types) ? sourceSupport.detected.unsupported_source_types : [];
 
         let html = `
             <div class="bg-vercelBlue/5 p-4 rounded-xl border border-vercelBlue/20 mt-3">
@@ -996,6 +999,35 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
+        if (sourceSupport) {
+            html += `
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-3 mt-3">
+                    <div class="bg-emerald-500/5 p-4 rounded-xl border border-emerald-500/20">
+                        <h5 class="text-[10px] uppercase font-semibold text-emerald-400 mb-3 flex items-center gap-1"><i data-lucide="check-circle-2" class="w-3 h-3"></i> Supported Source Types</h5>
+                        <div class="space-y-2">
+                            ${detectedSupported.length ? detectedSupported.map(item => `
+                                <div class="rounded-lg border border-emerald-500/15 bg-black/20 p-3">
+                                    <div class="text-xs font-semibold text-white">${escapeHtml(item.name || 'unknown')}</div>
+                                    <p class="mt-1 text-[11px] leading-5 text-textSecondary">${escapeHtml(item.explanation || '')}</p>
+                                </div>
+                            `).join('') : '<div class="text-xs text-textSecondary italic">No fully supported source type was detected in this analysis.</div>'}
+                        </div>
+                    </div>
+                    <div class="bg-red-500/5 p-4 rounded-xl border border-red-500/20">
+                        <h5 class="text-[10px] uppercase font-semibold text-red-400 mb-3 flex items-center gap-1"><i data-lucide="alert-triangle" class="w-3 h-3"></i> Detection-Only Source Types</h5>
+                        <div class="space-y-2">
+                            ${detectedUnsupported.length ? detectedUnsupported.map(item => `
+                                <div class="rounded-lg border border-red-500/15 bg-black/20 p-3">
+                                    <div class="text-xs font-semibold text-white">${escapeHtml(item.name || 'unknown')}</div>
+                                    <p class="mt-1 text-[11px] leading-5 text-textSecondary">${escapeHtml(item.explanation || '')}</p>
+                                </div>
+                            `).join('') : '<div class="text-xs text-textSecondary italic">No detection-only source type was found in this analysis.</div>'}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         if (reasoning) {
             html += renderJsonPanel('Local LLM Reasoning', 'brain', reasoning, 'mt-3');
         }
@@ -1007,6 +1039,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const panel = document.getElementById('pipeline-reports-panel');
         const grid = document.getElementById('pipeline-reports-grid');
         if (!panel || !grid) return;
+
+        pipelineReports = dedupePipelineReports(pipelineReports);
 
         if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
             panel.classList.add('hidden');
@@ -1079,13 +1113,35 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function dedupePipelineReports(pipelineReports) {
+        if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
+            return [];
+        }
+
+        const seen = new Set();
+        return pipelineReports.filter((report) => {
+            const key = JSON.stringify({
+                platform: report?.platform || '',
+                pipeline_name: report?.pipeline_name || '',
+                graph: report?.flow?.graph || {},
+                original: report?.original || {}
+            });
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+
     function normalizePipelineReports(pipelineReports) {
+        pipelineReports = dedupePipelineReports(pipelineReports);
         if (!Array.isArray(pipelineReports) || pipelineReports.length === 0) {
             return null;
         }
 
         const nodes = [];
         const edges = [];
+        const seenNodes = new Set();
+        const seenEdges = new Set();
 
         pipelineReports.forEach((report, reportIndex) => {
             const graph = report?.flow?.graph || {};
@@ -1114,23 +1170,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     };
                 }
 
-                nodes.push({
-                    id: scopedId,
-                    title: localId,
-                    subtitle: `${report.platform || 'Pipeline'} Item`,
-                    raw_type: nodeType,
-                    role,
-                    config,
-                    pipelineReport: report,
-                    pipelineNodeType: nodeType
-                });
+                if (!seenNodes.has(scopedId)) {
+                    seenNodes.add(scopedId);
+                    nodes.push({
+                        id: scopedId,
+                        title: localId,
+                        subtitle: `${report.platform || 'Pipeline'} Item`,
+                        raw_type: nodeType,
+                        role,
+                        config,
+                        pipelineReport: report,
+                        pipelineNodeType: nodeType
+                    });
+                }
             });
 
             reportEdges.forEach((edge) => {
-                edges.push({
+                const scopedEdge = {
                     from: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.from}`,
                     to: `${report.platform || 'pipeline'}:${report.pipeline_name || reportIndex}:${edge.to}`
-                });
+                };
+                const edgeKey = `${scopedEdge.from}->${scopedEdge.to}`;
+                if (!seenEdges.has(edgeKey)) {
+                    seenEdges.add(edgeKey);
+                    edges.push(scopedEdge);
+                }
             });
         });
 
@@ -1146,7 +1210,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function mergeAnalysisWithPipelineReports(analysisData, pipelineReports) {
-        const normalized = normalizePipelineReports(pipelineReports);
+        const dedupedReports = dedupePipelineReports(pipelineReports);
+        const normalized = normalizePipelineReports(dedupedReports);
         if (!normalized) return analysisData;
 
         return {
@@ -1156,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ingestion: analysisData.ingestion?.length ? analysisData.ingestion : normalized.ingestion,
             dq_rules: analysisData.dq_rules?.length ? analysisData.dq_rules : normalized.dq_rules,
             nodes: analysisData.nodes?.length ? analysisData.nodes : normalized.nodes,
-            data_pipeline_reports: pipelineReports,
+            data_pipeline_reports: dedupedReports,
             pipeline_summary_flow: { text: normalized.text }
         };
     }
@@ -1244,6 +1309,50 @@ document.addEventListener('DOMContentLoaded', () => {
         lucide.createIcons({ root: content });
     }
 
+    function renderSourceSupportCard(sourceSupport) {
+        const catalog = sourceSupport?.catalog || {};
+        const detected = sourceSupport?.detected || {};
+        const supported = Array.isArray(catalog.supported_source_types) ? catalog.supported_source_types : [];
+        const unsupported = Array.isArray(catalog.unsupported_source_types) ? catalog.unsupported_source_types : [];
+        const detectedSupported = new Set((detected.supported_source_types || []).map(item => item.name));
+        const detectedUnsupported = new Set((detected.unsupported_source_types || []).map(item => item.name));
+
+        const renderList = (items, tone) => items.map((item) => `
+            <div class="rounded-xl border ${tone === 'supported' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'} p-3">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm font-semibold text-white">${escapeHtml(item.name || 'unknown')}</div>
+                    ${item.detected ? `<span class="px-2 py-0.5 rounded-md ${tone === 'supported' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/15 text-red-400 border border-red-500/30'} text-[10px] font-bold uppercase tracking-wider">Detected</span>` : ''}
+                </div>
+                <p class="mt-2 text-xs leading-5 text-textSecondary">${escapeHtml(item.explanation || '')}</p>
+            </div>
+        `).join('');
+
+        return `
+            <div class="bg-surface border border-border rounded-xl p-4 flex flex-col gap-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <h4 class="text-xs uppercase tracking-wider font-semibold text-textSecondary">Source Support</h4>
+                        <p class="mt-1 text-sm text-white">Supported source types are normalized into structured config. Detection-only types are recognized but not fully extracted yet.</p>
+                    </div>
+                    <div class="text-right text-xs text-textSecondary">
+                        <div>${detectedSupported.size} supported detected</div>
+                        <div>${detectedUnsupported.size} detection-only detected</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div class="space-y-3">
+                        <div class="text-[11px] uppercase tracking-widest text-emerald-400 font-semibold">Supported Source Types</div>
+                        ${renderList(supported, 'supported')}
+                    </div>
+                    <div class="space-y-3">
+                        <div class="text-[11px] uppercase tracking-widest text-red-400 font-semibold">Detection-Only Source Types</div>
+                        ${renderList(unsupported, 'unsupported')}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
     async function renderResults(data) {
         if (data.data_pipeline_reports && (!data.nodes || data.nodes.length === 0)) {
             data = mergeAnalysisWithPipelineReports(data, data.data_pipeline_reports);
@@ -1294,6 +1403,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // --- 2. D3 Graph Generation ---
+        const svg = d3.select("#graph-svg");
+        svg.selectAll("*").remove();
+        d3.select("#graph-tooltip").style("display", "none");
+
         const g = new dagreD3.graphlib.Graph().setGraph({
             rankdir: 'LR',
             marginx: 40,
@@ -1463,7 +1576,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
 
-        const svg = d3.select("#graph-svg");
         const inner = svg.append("g");
         
         // Zoom behavior
@@ -1669,7 +1781,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 resultsContent.insertAdjacentHTML('beforeend', html);
             }
         });
-        
+
+        if (data.source_support) {
+            resultsContent.insertAdjacentHTML('beforeend', renderSourceSupportCard(data.source_support));
+        }
+
         lucide.createIcons({ root: resultsContent });
 
         // --- 4. DataPipeline sections ---
