@@ -44,7 +44,63 @@ def analyze_data_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
     pipelines: List[Dict[str, Any]] = []
     pipelines.extend(_extract_adf_pipelines(payload))
     pipelines.extend(_extract_fabric_pipelines(payload))
-    return pipelines
+    return _deduplicate_pipeline_reports(pipelines)
+
+
+def _deduplicate_pipeline_reports(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    unique_reports: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    skipped_count = 0
+    total_count = len(reports)
+
+    def norm_node(n_id: str) -> str:
+        val = str(n_id).lower().strip()
+        val = re.sub(r'_?\d+$', '', val)
+        return val
+
+    for report in reports:
+        name = str(report.get("pipeline_name", "")).strip()
+        flow = report.get("flow", {})
+        graph = flow.get("graph", {})
+        
+        nodes = []
+        for n in graph.get("nodes", []):
+            nodes.append(norm_node(n.get("id", "")) + "::" + str(n.get("type", "")).lower().strip())
+        nodes.sort()
+        
+        edges = []
+        for e in graph.get("edges", []):
+            edges.append(norm_node(e.get("from", "")) + "->" + norm_node(e.get("to", "")))
+        edges.sort()
+        
+        sig_dict = {
+            "nodes": nodes,
+            "edges": edges,
+            "text": str(flow.get("text", "")).lower().strip()
+        }
+        pipeline_key = "sig:" + json.dumps(sig_dict, sort_keys=True)
+        logger.debug("Pipeline dedup: flow signature per pipeline %s = %s", name, pipeline_key)
+            
+        if pipeline_key in seen_keys:
+            skipped_count += 1
+            logger.info("Pipeline dedup: duplicate flow skipped: %s", name)
+            continue
+            
+        seen_keys.add(pipeline_key)
+        unique_reports.append(report)
+
+    if reports:
+        rendered_names = [p.get("pipeline_name") for p in unique_reports]
+        total_nodes = sum(len(p.get("flow", {}).get("graph", {}).get("nodes", [])) for p in unique_reports)
+        total_edges = sum(len(p.get("flow", {}).get("graph", {}).get("edges", [])) for p in unique_reports)
+        logger.info("Pipeline dedup: total flows before dedup = %d", total_count)
+        logger.info("Pipeline dedup: unique flow structures after dedup = %d", len(unique_reports))
+        logger.info("Pipeline dedup: duplicate flow structures skipped = %d", skipped_count)
+        logger.info("Pipeline dedup: pipeline names rendered = %s", rendered_names)
+        logger.info("Pipeline dedup: final rendered nodes count = %d", total_nodes)
+        logger.info("Pipeline dedup: final rendered edges count = %d", total_edges)
+
+    return unique_reports
 
 
 def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
@@ -85,6 +141,8 @@ def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
         "type": "DataPipeline",
         "pipeline_name": name,
         "platform": "ADF",
+        "workspace_id": _first_string(payload.metadata.get("workspaceId"), payload.config.get("workspaceId")),
+        "artifact_id": _first_string(raw.get("id"), raw.get("pipelineId")),
         "source_configs": analysis["source_config"],
         "ingestion_configs": ingestion_config,
         "dq_rules": analysis["dq_rules"],
@@ -152,6 +210,8 @@ def _extract_fabric_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
                 "type": "DataPipeline",
                 "pipeline_name": name,
                 "platform": "Fabric",
+                "workspace_id": workspace_id,
+                "artifact_id": _first_string(config.get("objectId"), config.get("id"), config.get("pipelineId"), item_id),
                 "source_configs": analysis["source_config"],
                 "ingestion_configs": ingestion_config,
                 "dq_rules": analysis["dq_rules"],
