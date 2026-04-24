@@ -110,26 +110,28 @@
             <div class="max-w-5xl mx-auto space-y-10">
                 <section class="relative overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(0,112,243,0.22),transparent_32%),radial-gradient(circle_at_top_right,rgba(20,184,166,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] px-6 py-8 lg:px-8">
                     <div class="absolute inset-0 opacity-20 pointer-events-none hero-grid"></div>
-                    <div class="relative z-10 grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-8 items-start">
-                        <div>
-                            <div class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-textSecondary">Multi-cloud Pipeline Intelligence</div>
-                            <h2 class="mt-4 text-4xl lg:text-5xl font-semibold tracking-tight text-white">Upload configs, inspect live scans, and extract `DataPipeline` structure without hand-mapping.</h2>
-                            <p class="mt-4 max-w-2xl text-[15px] leading-7 text-textSecondary">Manual JSON intake now supports Azure, Fabric, AWS, and GCP configs directly. Upload an existing config, target the right analysis section, and review structured pipeline output in dedicated cards below the graph.</p>
+                    <div class="relative z-10 grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-8 items-stretch">
+                        <div class="flex flex-col justify-center max-w-full">
+                            <div>
+                                <div class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-textSecondary">Multi-cloud Pipeline Intelligence</div>
+                            </div>
+                            <h2 class="mt-4 text-3xl sm:text-4xl lg:text-5xl font-semibold tracking-tight text-white leading-snug lg:leading-tight" style="overflow-wrap: break-word; word-break: normal;">Upload configs, inspect live scans, and extract `DataPipeline` structure without hand-mapping.</h2>
+                            <p class="mt-4 max-w-2xl text-[14px] sm:text-[15px] leading-relaxed sm:leading-7 text-textSecondary" style="overflow-wrap: break-word; word-break: normal;">Manual JSON intake now supports Azure, Fabric, AWS, and GCP configs directly. Upload an existing config, target the right analysis section, and review structured pipeline output in dedicated cards below the graph.</p>
                         </div>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
-                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Manual Import</div>
-                                <div class="mt-2 text-2xl font-semibold text-white">Metadata / Config / Raw</div>
-                                <div class="mt-1 text-xs text-textSecondary">Choose target explicitly or auto-route.</div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 h-full">
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4 sm:p-5 flex flex-col h-full overflow-hidden">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary shrink-0">Manual Import</div>
+                                <div class="mt-2 text-xl sm:text-2xl font-semibold text-white" style="overflow-wrap: break-word; word-break: normal;">Metadata / Config / Raw</div>
+                                <div class="mt-auto pt-3 text-xs text-textSecondary">Choose target explicitly or auto-route.</div>
                             </div>
-                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4">
-                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Local Model</div>
-                                <div class="mt-2 text-2xl font-semibold text-white">{{ settings.llm_model }}</div>
-                                <div class="mt-1 text-xs text-textSecondary">Ollama-backed optional reasoning.</div>
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4 sm:p-5 flex flex-col h-full overflow-hidden">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary shrink-0">Local Model</div>
+                                <div class="mt-2 text-xl sm:text-2xl font-semibold text-white" style="overflow-wrap: break-word; word-break: normal;">{{ settings.llm_model }}</div>
+                                <div class="mt-auto pt-3 text-xs text-textSecondary">Ollama-backed optional reasoning.</div>
                             </div>
-                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4 col-span-2">
-                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary">Best Use</div>
-                                <div class="mt-2 text-sm text-white leading-6">Paste pipeline definitions, upload exported Azure/Fabric JSON, or scan cloud assets and review each detected `DataPipeline` as its own section.</div>
+                            <div class="rounded-2xl border border-white/10 bg-black/30 p-4 sm:p-5 col-span-1 sm:col-span-2 flex flex-col h-full overflow-hidden">
+                                <div class="text-[11px] uppercase tracking-[0.18em] text-textSecondary shrink-0">Best Use</div>
+                                <div class="mt-2 text-[13px] sm:text-sm text-white leading-relaxed sm:leading-6" style="overflow-wrap: break-word; word-break: normal;">Paste pipeline definitions, upload exported Azure/Fabric JSON, or scan cloud assets and review each detected `DataPipeline` as its own section.</div>
                             </div>
                         </div>
                     </div>
