@@ -1054,6 +1054,30 @@ document.addEventListener('DOMContentLoaded', () => {
             const flowText = report?.flow?.text || reformatted?.flow?.text || reformatted?.flow || 'unknown';
             const missing = Array.isArray(reformatted?.missing_fields_analysis) ? reformatted.missing_fields_analysis : [];
             const dqRules = Array.isArray(report?.dq_rules) ? report.dq_rules : [];
+            const capabilities = report?.capabilities?.capability_matrix || [];
+
+            const renderCapabilityStatus = (status) => {
+                if (status === 'SUPPORTED') return '<span class="text-emerald-500"><i data-lucide="check-circle" class="w-4 h-4"></i></span>';
+                if (status === 'PARTIAL') return '<span class="text-amber-500"><i data-lucide="alert-triangle" class="w-4 h-4"></i></span>';
+                return '<span class="text-red-500"><i data-lucide="x-circle" class="w-4 h-4"></i></span>';
+            };
+
+            const capabilitiesHtml = capabilities.length ? `
+                <div class="rounded-xl border border-white/10 bg-black/40 p-4">
+                    <h5 class="text-[11px] uppercase tracking-widest text-textSecondary font-semibold mb-3">Pipeline Capabilities</h5>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        ${capabilities.map(cap => `
+                            <div class="flex flex-col gap-1 p-3 rounded-lg bg-surface border border-white/5">
+                                <div class="flex items-center gap-2">
+                                    ${renderCapabilityStatus(cap.status)}
+                                    <span class="text-xs font-semibold text-white">${escapeHtml(cap.capability)}</span>
+                                </div>
+                                <div class="text-[10px] text-textSecondary pl-6 leading-relaxed">${escapeHtml(cap.reason)}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : '';
 
             return `
                 <section class="rounded-2xl border border-border bg-surface overflow-hidden">
@@ -1073,6 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                     </div>
                     <div class="p-5 space-y-4">
+                        ${capabilitiesHtml}
                         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
                             ${renderJsonPanel('Reformatted', 'wand-2', reformatted)}
                             ${renderJsonPanel('Original Cloud JSON', 'file-json', report?.original || {})}

@@ -44,7 +44,88 @@ def analyze_data_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
     pipelines: List[Dict[str, Any]] = []
     pipelines.extend(_extract_adf_pipelines(payload))
     pipelines.extend(_extract_fabric_pipelines(payload))
-    return _deduplicate_pipeline_reports(pipelines)
+    unique_pipelines = _deduplicate_pipeline_reports(pipelines)
+    
+    for p in unique_pipelines:
+        p["capabilities"] = _generate_capability_matrix(p)
+        
+    return unique_pipelines
+
+def _generate_capability_matrix(report: Dict[str, Any]) -> Dict[str, Any]:
+    matrix = []
+    
+    flow = report.get("flow", {})
+    graph = flow.get("graph", {})
+    nodes = graph.get("nodes", [])
+    
+    source_configs = report.get("source_configs", {})
+    dq_rules = report.get("dq_rules", [])
+    original = report.get("original", {})
+    
+    def has_node_type(type_name: str) -> bool:
+        return any(str(n.get("type", "")).lower() == type_name.lower() for n in nodes)
+    
+    def has_node_id_contains(substring: str) -> bool:
+        return any(substring.lower() in str(n.get("id", "")).lower() for n in nodes)
+
+    api_supported = has_node_type("WebActivity") or has_node_id_contains("http") or has_node_id_contains("rest")
+    if api_supported:
+        matrix.append({"capability": "API Ingestion", "status": "SUPPORTED", "reason": "Web/HTTP activity detected in pipeline flow"})
+    else:
+        matrix.append({"capability": "API Ingestion", "status": "NOT_SUPPORTED", "reason": "No Web/API activity found"})
+
+    source_str = str(source_configs).lower() + str(nodes).lower() + str(original).lower()
+    file_supported = any(ext in source_str for ext in ["csv", "json", "adls", "s3", "blob", "parquet", "delimited"])
+    if file_supported:
+        matrix.append({"capability": "File Ingestion", "status": "SUPPORTED", "reason": "File-based source or format detected"})
+    else:
+        matrix.append({"capability": "File Ingestion", "status": "NOT_SUPPORTED", "reason": "No file-based sources detected"})
+
+    db_supported = any(ext in source_str for ext in ["warehouse", "lakehouse", "sql", "table", "database"])
+    if db_supported:
+        matrix.append({"capability": "Database/Table Ingestion", "status": "SUPPORTED", "reason": "Database or table source detected"})
+    else:
+        matrix.append({"capability": "Database/Table Ingestion", "status": "NOT_SUPPORTED", "reason": "No database or table sources detected"})
+
+    batch_supported = has_node_type("ForEach") or has_node_type("Until") or has_node_id_contains("foreach") or has_node_id_contains("loop")
+    if batch_supported:
+        matrix.append({"capability": "Batch Processing", "status": "SUPPORTED", "reason": "ForEach or loop activity detected in pipeline flow"})
+    else:
+        matrix.append({"capability": "Batch Processing", "status": "NOT_SUPPORTED", "reason": "No batch/loop activities found"})
+
+    streaming_supported = any(ext in source_str for ext in ["event", "stream", "kafka", "eventhub"])
+    if streaming_supported:
+        matrix.append({"capability": "Streaming", "status": "SUPPORTED", "reason": "Streaming or event trigger detected"})
+    else:
+        matrix.append({"capability": "Streaming", "status": "NOT_SUPPORTED", "reason": "No streaming configs found"})
+
+    if dq_rules:
+        matrix.append({"capability": "Data Quality", "status": "SUPPORTED", "reason": "Explicit DQ rules detected"})
+    elif has_node_type("IfCondition") or has_node_type("Condition") or has_node_id_contains("condition"):
+        matrix.append({"capability": "Data Quality", "status": "PARTIAL", "reason": "Condition present but no explicit DQ rules"})
+    else:
+        matrix.append({"capability": "Data Quality", "status": "NOT_SUPPORTED", "reason": "No DQ rules or condition activities found"})
+
+    notif_supported = has_node_id_contains("email") or has_node_id_contains("alert") or has_node_id_contains("notification")
+    if notif_supported:
+        matrix.append({"capability": "Notifications", "status": "SUPPORTED", "reason": "Email or alert activity detected"})
+    else:
+        matrix.append({"capability": "Notifications", "status": "NOT_SUPPORTED", "reason": "No notification activities found"})
+
+    summary = {
+        "supported_count": sum(1 for m in matrix if m["status"] == "SUPPORTED"),
+        "not_supported_count": sum(1 for m in matrix if m["status"] == "NOT_SUPPORTED"),
+        "partial_count": sum(1 for m in matrix if m["status"] == "PARTIAL"),
+    }
+    
+    logger.info("Capability Matrix generated for %s: Supported: %d, Partial: %d, Not Supported: %d", report.get("pipeline_name", "Unknown"), summary["supported_count"], summary["partial_count"], summary["not_supported_count"])
+    for m in matrix:
+        logger.debug("Capability %s: %s (%s)", m["capability"], m["status"], m["reason"])
+
+    return {
+        "capability_matrix": matrix,
+        "summary": summary
+    }
 
 
 def _deduplicate_pipeline_reports(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
