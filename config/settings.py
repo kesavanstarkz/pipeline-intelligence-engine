@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     llm_model: str = "deepseek-r1:1.5b"
     llm_enabled: bool = True
+    de_config_tool_url: Optional[str] = None
 
     app_title: str = "Pipeline Intelligence Engine"
     app_version: str = "1.0.0"

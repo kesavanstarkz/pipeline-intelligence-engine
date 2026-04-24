@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from engine.detectors.base import CloudEnvironment
 
@@ -56,6 +56,28 @@ class WorkspaceDiscoverRequest(BaseModel):
     )
 
 
+class FinalConfigUIInputs(BaseModel):
+    platform: str = ""
+    ingestion_type: str = ""
+    dq_preference: str = ""
+
+
+class FinalConfigRequest(BaseModel):
+    raw_pipeline_json: Dict[str, Any] = Field(default_factory=dict)
+    extracted_config: Dict[str, Any] = Field(default_factory=dict)
+    example_config: Dict[str, Any] = Field(default_factory=dict)
+    ui_inputs: FinalConfigUIInputs = Field(default_factory=FinalConfigUIInputs)
+    use_llm: bool = False
+
+
+class FinalConfigResponse(BaseModel):
+    final_config: Dict[str, Any]
+    final_core: Dict[str, Any]
+    merge_report: Dict[str, List[Any]]
+    validation_report: Dict[str, Any]
+    architect_notes: List[str]
+
+
 class ConfidenceScores(BaseModel):
     framework: Optional[float] = None
     source: Optional[float] = None
@@ -81,6 +103,9 @@ class AnalyzeResponse(BaseModel):
     )
     pipelines:       Optional[List[Dict[str, Any]]] = Field(
         default=None, description="Distinct pipelines mapped out logically by the LLM"
+    )
+    data_pipeline_reports: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Strict Fabric / ADF pipeline workflow reports"
     )
     evidence:        Optional[Dict[str, List[str]]] = Field(
         default=None, description="Detection evidence trail per category"
@@ -118,3 +143,29 @@ class AnalyzeResponse(BaseModel):
         default=None, description="Detailed configuration inventory for all discovered cloud resources"
     )
 
+
+class PipelineFlowGraph(BaseModel):
+    nodes: List[Dict[str, str]] = Field(default_factory=list)
+    edges: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class PipelineFlow(BaseModel):
+    text: str
+    graph: PipelineFlowGraph
+
+
+class DataPipelineReport(BaseModel):
+    type: str = Field(default="DataPipeline")
+    pipeline_name: str
+    platform: str
+    source_configs: Dict[str, Any]
+    ingestion_configs: Dict[str, Any]
+    dq_rules: List[str]
+    flow: PipelineFlow
+    reformatted: Dict[str, Any]
+    original: Dict[str, Any]
+    reasoning: Optional[Dict[str, Any]] = None
+
+
+class DataPipelineAnalyzeResponse(RootModel[List[DataPipelineReport]]):
+    pass

@@ -1,0 +1,226 @@
+{
+  "pipeline_name": "Daily_Sales_Medallion_Full_ETL_2026",
+  "ingestion_overview": {
+    "ingestion_pattern": "hybrid_lambda",
+    "orchestrator": "Azure Data Factory",
+    "data_sources": [
+      "Azure SQL Database (batch CDC)",
+      "Azure Event Hub (real-time streaming)"
+    ],
+    "target_layer": "Bronze (Delta Lake on ADLS Gen2)",
+    "incremental_strategy": {
+      "sql": "watermark (modified_date)",
+      "streaming": "event_timestamp (CDC)"
+    },
+    "triggers": {
+      "batch": "schedule-based",
+      "streaming": "Event Grid (event-driven)"
+    }
+  },
+  "source_configuration": {
+    "sql_source": {
+      "name": "sql_orders_source",
+      "type": "Azure SQL Database",
+      "connection": {
+        "server": "sales-prod.database.windows.net",
+        "database": "salesdb_prod",
+        "authentication": "Managed Identity",
+        "network": "Private Endpoint + Data Gateway"
+      },
+      "extraction": {
+        "mode": "incremental",
+        "query": "SELECT * FROM dbo.orders_raw WHERE modified_date > @watermark"
+      },
+      "data_profile": {
+        "volume_per_day": "2.8M rows",
+        "format": "structured",
+        "sensitivity": [
+          "PII",
+          "Financial"
+        ]
+      },
+      "security": {
+        "access_control": [
+          "RBAC",
+          "Row-Level Security"
+        ]
+      },
+      "watermark_config": {
+        "column": "modified_date",
+        "state_store": "ingestion_metadata_table"
+      }
+    },
+    "eventhub_source": {
+      "name": "eventhub_orders_source",
+      "type": "Azure Event Hub",
+      "connection": {
+        "namespace": "sales-events-eastus",
+        "eventhub": "orders-stream",
+        "authentication": "SAS Token",
+        "network": "Private Endpoint"
+      },
+      "streaming_config": {
+        "ingestion_mode": "real-time",
+        "partitions": 32,
+        "throughput_units": "auto-scale (max 20)",
+        "retention_days": 7
+      },
+      "data_format": {
+        "encoding": [
+          "Avro",
+          "JSON"
+        ],
+        "peak_throughput": "450 events/sec",
+        "volume_per_day": "850K events"
+      },
+      "trigger": {
+        "type": "Event Grid",
+        "condition": "new events arrival"
+      },
+      "cdc_mechanism": {
+        "source": "upstream SQL → Event Hub"
+      }
+    }
+  },
+  "adf_ingestion_pipeline": {
+    "pipeline_name": "adf-pipeline-sales-medallion-v2",
+    "activities": [
+      {
+        "name": "Copy_SQL_And_Stream_To_Bronze",
+        "type": "Copy Activity",
+        "source_query": "SELECT * FROM orders_raw WHERE modified_date > @watermark OR event_timestamp > @last_processed",
+        "sink": "Delta Lake",
+        "compute": "serverless auto-scale",
+        "performance": {
+          "rows_processed_last_run": 2876543,
+          "runtime": "9m 12s"
+        },
+        "cost": {
+          "per_run": "$0.18"
+        }
+      }
+    ]
+  },
+  "data_flow": {
+    "name": "DF_Validate_And_Map",
+    "transformations": [
+      "schema validation",
+      "column mapping",
+      "type normalization"
+    ],
+    "schema": {
+      "enforcement": true,
+      "evolution": "controlled"
+    }
+  },
+  "sink_configuration": {
+    "storage": "Azure Data Lake Gen2",
+    "account": "datalake-prod-eastus",
+    "container": "bronze",
+    "format": {
+      "type": "Delta Lake",
+      "compression": "Snappy",
+      "acid": true
+    },
+    "path_structure": {
+      "base_path": "/sales/raw/",
+      "partitioning": [
+        "year",
+        "month",
+        "day",
+        "hour"
+      ],
+      "example_path": "/sales/raw/year=2026/month=03/day=30/hour={HH}/"
+    },
+    "file_characteristics": {
+      "size_last_batch": "1.34 GB",
+      "file_count": 184
+    },
+    "lifecycle_policy": {
+      "cool_after_days": 7,
+      "archive_after_days": 90
+    }
+  },
+  "incremental_cdc_logic": {
+    "unified_query": "SELECT * FROM orders_raw WHERE modified_date > @watermark OR event_timestamp > @last_processed",
+    "state_management": {
+      "sql_watermark": "datetime",
+      "event_timestamp": "datetime"
+    },
+    "state_store": "ingestion_metadata_table"
+  },
+  "error_handling": {
+    "strategy": [
+      "skip incompatible rows",
+      "log errors"
+    ],
+    "dead_letter_queue": {
+      "location": "/errors/orders/"
+    },
+    "retry_policy": {
+      "max_retries": 3,
+      "backoff": "exponential"
+    }
+  },
+  "performance_scaling": {
+    "compute": {
+      "ADF": "serverless auto-scale"
+    },
+    "throughput": {
+      "sql": "~2.8M rows/day",
+      "streaming": "~850K events/day"
+    },
+    "latency": {
+      "batch": "~45 minutes",
+      "streaming": "near real-time"
+    }
+  },
+  "security_configuration": {
+    "network": [
+      "Private Endpoints (SQL, Event Hub, ADLS)"
+    ],
+    "authentication": [
+      "Managed Identity (SQL, ADLS)",
+      "SAS Token (Event Hub)"
+    ],
+    "authorization": [
+      "RBAC",
+      "ACLs"
+    ],
+    "encryption": {
+      "at_rest": [
+        "Customer-managed keys",
+        "Microsoft-managed keys"
+      ],
+      "in_transit": "TLS 1.2"
+    }
+  },
+  "governance_lineage": {
+    "catalog": "Microsoft Purview",
+    "classification": [
+      "PII",
+      "Financial",
+      "Confidential"
+    ],
+    "data_quality_rules": [
+      "Completeness > 98%",
+      "No duplicates on order_id",
+      "Valid date ranges"
+    ],
+    "lineage_tracking": "source → ingestion → bronze",
+    "governance_score": 94.8
+  },
+  "observability_monitoring": {
+    "metrics": [
+      "rows_processed",
+      "runtime",
+      "cost_per_run"
+    ],
+    "logging": true,
+    "alerts": [
+      "pipeline failure",
+      "data quality threshold breach"
+    ]
+  },
+  "final_definition": "Hybrid batch + streaming ingestion system using watermark-based CDC for SQL and Event Hub for real-time ingestion, unified in ADF and landed into partitioned Delta Bronze with governance, security, and schema enforcement."
+}

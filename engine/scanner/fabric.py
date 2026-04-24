@@ -1,4 +1,6 @@
 import logging
+import base64
+import json
 import requests
 from typing import Dict, List, Any
 from .base import CloudScanner
@@ -71,6 +73,10 @@ class FabricScanner(CloudScanner):
                                         item_meta["configuration"]["OneLakeTablesPath"] = lh_props.get('oneLakeTablesPath')
                                 except Exception:
                                     pass
+                            elif str(item_type).lower() in {"pipeline", "datapipeline"}:
+                                definition = self._fetch_item_definition(headers, ws_id, item_id, item_type)
+                                if definition:
+                                    item_meta["configuration"]["Definition"] = definition
                                     
                             raw_assets["fabric_items"].append(item_meta)
             elif ws_response.status_code == 401:
@@ -85,6 +91,86 @@ class FabricScanner(CloudScanner):
                 return self._simulate_fabric()
 
         return {"raw_cloud_dump": [raw_assets]}
+
+    def _fetch_item_definition(self, headers: Dict[str, str], workspace_id: str, item_id: str, item_type: str) -> Dict[str, Any] | None:
+        urls = [
+            f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/items/{item_id}/getDefinition",
+            f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/{str(item_type).lower()}/items/{item_id}/getDefinition",
+        ]
+
+        for url in urls:
+            try:
+                response = requests.post(url, headers=headers, timeout=15)
+                if response.status_code in (200, 201):
+                    payload = response.json()
+                    decoded = self._decode_definition_payload(payload)
+                    if decoded:
+                        return decoded
+                elif response.status_code == 202:
+                    location = response.headers.get("Location")
+                    if location:
+                        polled = self._poll_lro_definition(headers, location)
+                        decoded = self._decode_definition_payload(polled) if polled else None
+                        if decoded:
+                            return decoded
+            except Exception as exc:
+                logger.debug(f"Fabric definition fetch failed for {item_id} via {url}: {exc}")
+        return None
+
+    def _poll_lro_definition(self, headers: Dict[str, str], location: str) -> Dict[str, Any] | None:
+        for _ in range(5):
+            try:
+                response = requests.get(location, headers=headers, timeout=15)
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code in (202, 204):
+                    continue
+            except Exception as exc:
+                logger.debug(f"Fabric definition poll failed: {exc}")
+                return None
+        return None
+
+    def _decode_definition_payload(self, payload: Dict[str, Any]) -> Dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+
+        parts = payload.get("definition", {}).get("parts") or payload.get("parts") or []
+        decoded: Dict[str, Any] = {}
+        if not isinstance(parts, list):
+            return None
+
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            path = part.get("path")
+            if not path:
+                continue
+            raw_value = (
+                part.get("payload")
+                or part.get("content")
+                or part.get("data")
+                or part.get("payloadBase64")
+            )
+            if raw_value is None:
+                continue
+
+            text_value = None
+            if isinstance(raw_value, str):
+                text_value = raw_value
+                try:
+                    text_value = base64.b64decode(raw_value).decode("utf-8")
+                except Exception:
+                    text_value = raw_value
+
+            if text_value is None:
+                continue
+
+            try:
+                decoded[path] = json.loads(text_value)
+            except Exception:
+                decoded[path] = text_value
+
+        return decoded or None
 
     def _simulate_fabric(self) -> Dict[str, List[Any]]:
         return {"raw_cloud_dump": [{
@@ -101,7 +187,35 @@ class FabricScanner(CloudScanner):
                 },
                 {
                     "id": "fabric || Silver-Transformation",
-                    "configuration": {"Type": "Pipeline", "Workspace": "Analytics-Hub"}
+                    "configuration": {
+                        "Type": "Pipeline",
+                        "Workspace": "Analytics-Hub",
+                        "Definition": {
+                            "pipeline-content.json": {
+                                "properties": {
+                                    "activities": [
+                                        {
+                                            "name": "API Ingestion",
+                                            "type": "WebActivity",
+                                            "typeProperties": {
+                                                "method": "GET",
+                                                "url": "https://api.contoso.com/orders"
+                                            }
+                                        },
+                                        {
+                                            "name": "Notebook 1",
+                                            "type": "TridentNotebook",
+                                            "dependsOn": [{"activity": "API Ingestion"}],
+                                            "typeProperties": {
+                                                "notebookId": "nb-001",
+                                                "workspaceId": "Analytics-Hub"
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
                 }
             ]
         }]}
