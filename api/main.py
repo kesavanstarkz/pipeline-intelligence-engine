@@ -513,7 +513,7 @@ async def list_detectors() -> Dict[str, List[str]]:
 @app.get("/", summary="Interactive Dashboard")
 async def root(request: Request):
     """Serve the single-page application dashboard."""
-    static_version = "20260424-2"
+    static_version = "20260427-1"
     return templates.TemplateResponse(
         "index.html",
         {

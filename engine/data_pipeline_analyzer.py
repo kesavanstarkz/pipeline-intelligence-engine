@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 import json
 import logging
+from urllib.parse import urlparse
 import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -226,6 +227,7 @@ def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
         "artifact_id": _first_string(raw.get("id"), raw.get("pipelineId")),
         "source_configs": analysis["source_config"],
         "ingestion_configs": ingestion_config,
+        "ingestion_details": analysis["ingestion_details"],
         "dq_rules": analysis["dq_rules"],
         "flow": analysis["flow"],
         "reformatted": {
@@ -235,6 +237,7 @@ def _extract_adf_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
             "source_configs": analysis["source_config"],
             "ingestion_config": ingestion_config,
             "ingestion_configs": ingestion_config,
+            "ingestion_details": analysis["ingestion_details"],
             "dq_rules": analysis["dq_rules"],
             "flow": analysis["flow"],
             "missing_fields_analysis": _build_missing_fields_analysis(
@@ -295,6 +298,7 @@ def _extract_fabric_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
                 "artifact_id": _first_string(config.get("objectId"), config.get("id"), config.get("pipelineId"), item_id),
                 "source_configs": analysis["source_config"],
                 "ingestion_configs": ingestion_config,
+                "ingestion_details": analysis["ingestion_details"],
                 "dq_rules": analysis["dq_rules"],
                 "flow": analysis["flow"],
                 "reformatted": {
@@ -304,6 +308,7 @@ def _extract_fabric_pipelines(payload: AnalysisPayload) -> List[Dict[str, Any]]:
                     "source_configs": analysis["source_config"],
                     "ingestion_config": ingestion_config,
                     "ingestion_configs": ingestion_config,
+                    "ingestion_details": analysis["ingestion_details"],
                     "dq_rules": analysis["dq_rules"],
                     "flow": analysis["flow"],
                     "missing_fields_analysis": _build_missing_fields_analysis(
@@ -352,6 +357,12 @@ def _analyze_pipeline_structure(
         pipeline_name=pipeline_name,
         dq_rules=dq_rules,
     )
+    ingestion_details = _extract_ingestion_details(
+        activities=ordered_activities,
+        definition=definition,
+        source_candidates=source_candidates,
+        destination=destination,
+    )
 
     logger.debug(
         "Pipeline analysis complete for %s | sources=%s destination=%s dq_rules=%s data_format=%s",
@@ -367,11 +378,260 @@ def _analyze_pipeline_structure(
         "destination": destination,
         "dq_rules": dq_rules,
         "data_format": data_format,
+        "ingestion_details": ingestion_details,
         "flow": {
             "text": flow_text,
             "graph": graph,
         },
     }
+
+
+def _extract_ingestion_details(
+    *,
+    activities: List[Dict[str, Any]],
+    definition: Dict[str, Any],
+    source_candidates: List[Dict[str, Any]],
+    destination: Optional[Any],
+) -> Dict[str, Any]:
+    source_datasets = _collect_activity_datasets(activities, "source")
+    sink_datasets = _collect_activity_datasets(activities, "sink")
+    combined_text = f"{str(definition).lower()} {str(activities).lower()} {str(source_candidates).lower()} {str(destination).lower()}"
+    dataset_types = [
+        str(dataset_type).lower()
+        for dataset_type in (
+            _dataset_type_name(dataset) for dataset in [*source_datasets, *sink_datasets]
+        )
+        if dataset_type
+    ]
+    source_services = [
+        str(candidate.get("service_name", "")).lower()
+        for candidate in source_candidates
+        if candidate.get("service_name")
+    ]
+
+    ingestion_types: List[str] = []
+    if any(
+        (
+            _activity_type_in(activity, {"webactivity", "http", "rest", "graphql"})
+            or _text_contains_any(str(activity).lower(), ("webactivity", "http", "rest", "graphql"))
+        )
+        for activity in activities
+    ):
+        ingestion_types.append("API")
+
+    if (
+        any(dataset_type in {"delimitedtext", "json", "parquet"} for dataset_type in dataset_types)
+        or any(service in {"lakehouse"} for service in source_services)
+        or any(_is_file_dataset(dataset) for dataset in [*source_datasets, *sink_datasets])
+        or _text_contains_any(combined_text, ("blob", "s3", "adls", "onelake"))
+    ):
+        ingestion_types.append("File-based")
+
+    if _text_contains_any(combined_text, ("sql", "jdbc", "datawarehouse", "table", "sink to warehouse", "warehousetable")):
+        ingestion_types.append("Database")
+
+    if _text_contains_any(combined_text, ("kafka", "eventhub", "kinesis")):
+        ingestion_types.append("Streaming")
+
+    file_types_input = _dedupe_strings(
+        _normalize_file_type(_dataset_type_name(dataset))
+        for dataset in source_datasets
+    )
+    file_types_output = _dedupe_strings(
+        _normalize_file_type(_dataset_type_name(dataset))
+        for dataset in sink_datasets
+    )
+
+    if "API" in ingestion_types and not file_types_input:
+        file_types_input = ["JSON"]
+
+    delimiters = {
+        "column_delimiter": _find_first_key_value(definition, "columnDelimiter"),
+        "escape_char": _find_first_key_value(definition, "escapeChar"),
+        "quote_char": _find_first_key_value(definition, "quoteChar"),
+        "header": _find_first_key_value(definition, "firstRowAsHeader"),
+    }
+
+    loading_flow = _build_loading_flow(
+        activities=activities,
+        source_candidates=source_candidates,
+        source_datasets=source_datasets,
+        sink_datasets=sink_datasets,
+        destination=destination,
+    )
+
+    return {
+        "ingestion_types": ingestion_types,
+        "file_types": {
+            "input": file_types_input,
+            "output": file_types_output,
+        },
+        "delimiters": delimiters,
+        "loading_flow": loading_flow,
+    }
+
+
+def _collect_activity_datasets(activities: List[Dict[str, Any]], preferred_key: str) -> List[Dict[str, Any]]:
+    datasets: List[Dict[str, Any]] = []
+    for activity in activities:
+        type_properties = activity.get("typeProperties", {}) if isinstance(activity.get("typeProperties"), dict) else {}
+        dataset = _find_dataset_settings(type_properties, preferred_key)
+        if dataset:
+            datasets.append(dataset)
+    return datasets
+
+
+def _activity_type_in(activity: Dict[str, Any], values: Set[str]) -> bool:
+    activity_type = str(activity.get("type", "")).lower()
+    return activity_type in values
+
+
+def _text_contains_any(text: str, values: Tuple[str, ...]) -> bool:
+    return any(value in text for value in values)
+
+
+def _dataset_type_name(dataset: Dict[str, Any]) -> Optional[str]:
+    return _first_string(
+        dataset.get("type"),
+        dataset.get("format"),
+        dataset.get("formatType"),
+        dataset.get("fileFormat"),
+    )
+
+
+def _normalize_file_type(dataset_type: Optional[str]) -> Optional[str]:
+    if not dataset_type:
+        return None
+    normalized = str(dataset_type).strip()
+    lowered = normalized.lower()
+    mapping = {
+        "delimitedtext": "DelimitedText",
+        "json": "JSON",
+        "parquet": "Parquet",
+    }
+    return mapping.get(lowered)
+
+
+def _dedupe_strings(values: Iterable[Optional[str]]) -> List[str]:
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _build_loading_flow(
+    *,
+    activities: List[Dict[str, Any]],
+    source_candidates: List[Dict[str, Any]],
+    source_datasets: List[Dict[str, Any]],
+    sink_datasets: List[Dict[str, Any]],
+    destination: Optional[Any],
+) -> str:
+    stages: List[Tuple[str, str]] = []
+    stage_seen: Set[Tuple[str, str]] = set()
+
+    def add_stage(stage: str, label: Optional[str]) -> None:
+        if not label:
+            return
+        entry = (stage, label)
+        if entry in stage_seen:
+            return
+        stage_seen.add(entry)
+        stages.append(entry)
+
+    for candidate in source_candidates:
+        if str(candidate.get("source_type")) == "API":
+            add_stage("SOURCE", _source_candidate_entity_label(candidate))
+
+    for dataset in source_datasets:
+        if _is_file_dataset(dataset):
+            add_stage("SOURCE", _dataset_entity_label(dataset))
+        elif _is_database_dataset(dataset):
+            add_stage("SOURCE", _dataset_entity_label(dataset))
+
+    for activity in activities:
+        activity_type = str(activity.get("type", "")).lower()
+        type_properties = activity.get("typeProperties", {}) if isinstance(activity.get("typeProperties"), dict) else {}
+        sink_dataset = _find_dataset_settings(type_properties, "sink")
+
+        if activity_type == "webactivity":
+            add_stage("SOURCE", _web_activity_label(activity))
+
+        if sink_dataset and _is_file_dataset(sink_dataset):
+            add_stage("STAGING", _dataset_entity_label(sink_dataset))
+
+        if activity_type in {"tridentnotebook", "databricksnotebook", "synapsenotebook", "notebook", "script", "storedprocedure", "sqlserverstoredprocedure"}:
+            add_stage("TRANSFORMATION", _activity_label(activity))
+
+        if sink_dataset and _is_database_dataset(sink_dataset):
+            add_stage("DESTINATION", _dataset_entity_label(sink_dataset))
+
+    for dataset in sink_datasets:
+        if _is_database_dataset(dataset):
+            add_stage("DESTINATION", _dataset_entity_label(dataset))
+
+    if not any(stage == "DESTINATION" for stage, _ in stages) and destination is not None:
+        destination_label = _display_value(destination)
+        add_stage("DESTINATION", destination_label)
+
+    return " -> ".join(f"{stage}: {label}" for stage, label in stages)
+
+
+def _source_candidate_entity_label(candidate: Dict[str, Any]) -> str:
+    details = candidate.get("connection_details", {}) if isinstance(candidate.get("connection_details"), dict) else {}
+    endpoint = _first_string(details.get("endpoint"))
+    if endpoint:
+        return _endpoint_entity_label(endpoint)
+    return _source_candidate_label(candidate)
+
+
+def _web_activity_label(activity: Dict[str, Any]) -> str:
+    type_properties = activity.get("typeProperties", {}) if isinstance(activity.get("typeProperties"), dict) else {}
+    endpoint = _first_string(type_properties.get("url"), type_properties.get("relativeUrl"))
+    if endpoint:
+        return _endpoint_entity_label(endpoint)
+    return _activity_label(activity)
+
+
+def _endpoint_entity_label(endpoint: str) -> str:
+    try:
+        parsed = urlparse(endpoint)
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if path_parts:
+            return f"{path_parts[-1]} API"
+    except Exception:
+        logger.debug("Could not parse endpoint label from %s", endpoint)
+    return endpoint
+
+
+def _dataset_entity_label(dataset: Dict[str, Any]) -> str:
+    return (
+        _first_string(
+            dataset.get("table"),
+            dataset.get("tableName"),
+            dataset.get("entity"),
+            dataset.get("path"),
+            dataset.get("folderPath"),
+            dataset.get("fileName"),
+            dataset.get("artifactId"),
+            dataset.get("type"),
+        )
+        or "unknown"
+    )
+
+
+def _is_file_dataset(dataset: Dict[str, Any]) -> bool:
+    dataset_text = str(dataset).lower()
+    return any(token in dataset_text for token in ("delimitedtext", "json", "parquet", "blob", "s3", "adls", "lakehouse", "file", "onelake"))
+
+
+def _is_database_dataset(dataset: Dict[str, Any]) -> bool:
+    dataset_text = str(dataset).lower()
+    return any(token in dataset_text for token in ("sql", "jdbc", "datawarehouse", "table", "warehousetable"))
 
 
 def _collect_source_candidates(

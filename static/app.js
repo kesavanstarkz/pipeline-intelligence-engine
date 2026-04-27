@@ -144,6 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return {
                 source_configs: reformatted.source_configs || reformatted.source_config || {},
                 ingestion_configs: reformatted.ingestion_configs || reformatted.ingestion_config || {},
+                ingestion_details: reformatted.ingestion_details || report.ingestion_details || {},
                 dq_rules: Array.isArray(reformatted.dq_rules) ? reformatted.dq_rules : [],
                 flow: reformatted.flow || {},
                 missing_fields_analysis: Array.isArray(reformatted.missing_fields_analysis) ? reformatted.missing_fields_analysis : []
@@ -153,6 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
             source_configs: data?.source_config || {},
             ingestion_configs: data?.ingestion_config || {},
+            ingestion_details: report?.ingestion_details || {},
             dq_rules: Array.isArray(data?.dq_rules) ? data.dq_rules : [],
             flow: data?.flow || {},
             missing_fields_analysis: []
@@ -976,10 +978,73 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+    function renderDetailTagList(items, tone = 'blue') {
+        if (!Array.isArray(items) || items.length === 0) {
+            return '<span class="text-textSecondary italic">n/a</span>';
+        }
+
+        const toneClass = tone === 'emerald'
+            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+            : 'bg-vercelBlue/10 border-vercelBlue/20 text-vercelBlue';
+
+        return `
+            <div class="flex flex-wrap justify-end gap-1.5">
+                ${items.map(item => `<span class="px-2 py-1 rounded-md border text-[10px] font-semibold uppercase tracking-wider ${toneClass}">${escapeHtml(item)}</span>`).join('')}
+            </div>
+        `;
+    }
+
+    function renderDetailRows(rows) {
+        return rows.map(({ label, value, tone }) => `
+            <div class="flex justify-between items-start gap-6 py-2.5 border-b border-white/5 last:border-0">
+                <div class="text-[10px] uppercase tracking-wider text-textSecondary font-semibold shrink-0">${escapeHtml(label)}</div>
+                <div class="text-right text-xs flex-1">
+                    ${Array.isArray(value) ? renderDetailTagList(value, tone) : renderConfigValue(value)}
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function renderIngestionDetailsCard(ingestionDetails) {
+        const details = ingestionDetails && typeof ingestionDetails === 'object' ? ingestionDetails : {};
+        const fileTypes = details.file_types && typeof details.file_types === 'object' ? details.file_types : {};
+        const delimiters = details.delimiters && typeof details.delimiters === 'object' ? details.delimiters : {};
+
+        const summaryRows = renderDetailRows([
+            { label: 'Ingestion Types', value: Array.isArray(details.ingestion_types) ? details.ingestion_types : [], tone: 'blue' },
+            { label: 'Input File Types', value: Array.isArray(fileTypes.input) ? fileTypes.input : [], tone: 'emerald' },
+            { label: 'Output File Types', value: Array.isArray(fileTypes.output) ? fileTypes.output : [], tone: 'emerald' },
+            { label: 'Loading Flow', value: details.loading_flow || null }
+        ]);
+
+        const delimiterRows = renderDetailRows([
+            { label: 'Column Delimiter', value: delimiters.column_delimiter ?? null },
+            { label: 'Escape Char', value: delimiters.escape_char ?? null },
+            { label: 'Quote Char', value: delimiters.quote_char ?? null },
+            { label: 'Header', value: delimiters.header ?? null }
+        ]);
+
+        return `
+            <div class="rounded-xl border border-vercelBlue/20 bg-vercelBlue/5 p-4">
+                <h5 class="text-[11px] uppercase tracking-widest text-vercelBlue font-semibold mb-3">Ingestion Details</h5>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div class="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+                        ${summaryRows}
+                    </div>
+                    <div class="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+                        <div class="text-[10px] uppercase tracking-wider text-textSecondary font-semibold mb-2">Delimiters</div>
+                        ${delimiterRows}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
     function renderPipelineReportPanels(report) {
         const reformatted = report?.reformatted || {};
         const original = report?.original || {};
         const reasoning = report?.reasoning || null;
+        const ingestionDetails = report?.ingestion_details || reformatted?.ingestion_details || {};
         const sourceSupport = latestAnalysisData?.source_support || null;
         const detectedSupported = Array.isArray(sourceSupport?.detected?.supported_source_types) ? sourceSupport.detected.supported_source_types : [];
         const detectedUnsupported = Array.isArray(sourceSupport?.detected?.unsupported_source_types) ? sourceSupport.detected.unsupported_source_types : [];
@@ -998,6 +1063,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${renderJsonPanel('Original', 'file-json', original)}
             </div>
         `;
+
+        if (Object.keys(ingestionDetails).length > 0) {
+            html += renderIngestionDetailsCard(ingestionDetails);
+        }
 
         if (sourceSupport) {
             html += `
@@ -1051,6 +1120,7 @@ document.addEventListener('DOMContentLoaded', () => {
         panel.classList.remove('hidden');
         grid.innerHTML = pipelineReports.map((report, index) => {
             const reformatted = report?.reformatted || {};
+            const ingestionDetails = report?.ingestion_details || reformatted?.ingestion_details || {};
             const flowText = report?.flow?.text || reformatted?.flow?.text || reformatted?.flow || 'unknown';
             const missing = Array.isArray(reformatted?.missing_fields_analysis) ? reformatted.missing_fields_analysis : [];
             const dqRules = Array.isArray(report?.dq_rules) ? report.dq_rules : [];
@@ -1098,6 +1168,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="p-5 space-y-4">
                         ${capabilitiesHtml}
+                        ${Object.keys(ingestionDetails).length ? renderIngestionDetailsCard(ingestionDetails) : ''}
                         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
                             ${renderJsonPanel('Reformatted', 'wand-2', reformatted)}
                             ${renderJsonPanel('Original Cloud JSON', 'file-json', report?.original || {})}

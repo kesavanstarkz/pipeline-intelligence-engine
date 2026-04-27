@@ -163,6 +163,7 @@ class DataPipelineReport(BaseModel):
     platform: str
     source_configs: Dict[str, Any]
     ingestion_configs: Dict[str, Any]
+    ingestion_details: Optional[Dict[str, Any]] = None
     dq_rules: List[str]
     flow: PipelineFlow
     reformatted: Dict[str, Any]

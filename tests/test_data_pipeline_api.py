@@ -123,6 +123,17 @@ def test_analyze_data_pipelines_fabric_definition_extracts_configs():
     assert data[0]["reformatted"]["source_configs"]["service_name"] == "REST API"
     assert data[0]["reformatted"]["source_configs"]["connection_details"]["endpoint"] == "https://api.contoso.com/orders"
     assert data[0]["reformatted"]["ingestion_configs"]["destination"] == "Notebook 1"
+    assert data[0]["ingestion_details"] == {
+        "ingestion_types": ["API"],
+        "file_types": {"input": ["JSON"], "output": []},
+        "delimiters": {
+            "column_delimiter": None,
+            "escape_char": None,
+            "quote_char": None,
+            "header": None,
+        },
+        "loading_flow": "SOURCE: orders API -> TRANSFORMATION: Notebook 1 -> DESTINATION: Notebook 1",
+    }
     assert data[0]["reformatted"]["flow"]["text"] == "REST API -> Fetch Orders -> Notebook 1 -> Notebook 1"
     assert data[0]["reformatted"]["flow"]["graph"]["nodes"] == [
         {"id": "source_1", "type": "source"},
@@ -188,6 +199,9 @@ def test_analyze_data_pipelines_ignores_email_notification_as_destination():
     assert response.status_code == 200, response.text
     data = response.json()
     assert data[0]["reformatted"]["ingestion_configs"]["destination"] == "sales_fact"
+    assert "Database" in data[0]["ingestion_details"]["ingestion_types"]
+    assert data[0]["ingestion_details"]["file_types"]["output"] == []
+    assert data[0]["ingestion_details"]["loading_flow"] == "DESTINATION: sales_fact"
     assert data[0]["reformatted"]["flow"]["graph"]["nodes"] == [
         {"id": "load_sales", "type": "ingestion"},
     ]
@@ -201,3 +215,54 @@ def test_analyze_data_pipelines_empty_payload():
 
     assert response.status_code == 200, response.text
     assert response.json() == []
+
+
+def test_analyze_data_pipelines_extracts_delimited_text_details():
+    response = client.post(
+        "/analyze/data-pipelines",
+        json={
+            "metadata": {"platform": "adf", "name": "csv_to_sql"},
+            "raw_json": {
+                "type": "adf_pipeline",
+                "activities": [
+                    {
+                        "name": "Copy Sales",
+                        "type": "Copy",
+                        "typeProperties": {
+                            "source": {
+                                "datasetSettings": {
+                                    "type": "DelimitedText",
+                                    "path": "raw/sales.csv",
+                                    "columnDelimiter": ",",
+                                    "escapeChar": "\\",
+                                    "quoteChar": "\"",
+                                    "firstRowAsHeader": True,
+                                }
+                            },
+                            "sink": {
+                                "datasetSettings": {
+                                    "type": "AzureSqlTable",
+                                    "schema": "dbo",
+                                    "table": "sales_fact",
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data[0]["ingestion_details"] == {
+        "ingestion_types": ["File-based", "Database"],
+        "file_types": {"input": ["DelimitedText"], "output": []},
+        "delimiters": {
+            "column_delimiter": ",",
+            "escape_char": "\\",
+            "quote_char": "\"",
+            "header": True,
+        },
+        "loading_flow": "SOURCE: raw/sales.csv -> DESTINATION: sales_fact",
+    }
