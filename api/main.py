@@ -515,10 +515,10 @@ async def root(request: Request):
     """Serve the single-page application dashboard."""
     static_version = "20260427-1"
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
-            "settings": settings,
+            "settings": settings.model_dump(),
             "static_version": static_version,
         },
     )
